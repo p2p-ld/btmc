@@ -1,6 +1,15 @@
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+type PieceIndex = int
+"""Which piece of a torrent, counting from 0"""
+
+type BlockOffset = int
+"""Where a block starts within its piece, in bytes. The protocol calls it ``begin``."""
+
+type BlockLength = int
+"""The number of bytes in a block"""
+
 
 class Addr(NamedTuple):
     host: str

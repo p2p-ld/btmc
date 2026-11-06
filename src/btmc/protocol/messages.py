@@ -27,7 +27,7 @@ from urllib.parse import quote_from_bytes
 import bencode_rs
 
 from btmc.exceptions import PeerError, TrackerError
-from btmc.types import Addr
+from btmc.types import Addr, BlockLength, BlockOffset, PieceIndex
 
 PROTOCOL = b"BitTorrent protocol"
 UDP_MAGIC = 0x41727101980
@@ -177,7 +177,7 @@ class NotInterested(PeerMessage):
 
 @dataclass(frozen=True)
 class Have(PeerMessage):
-    index: int
+    index: PieceIndex
 
     id = PeerMessageId.HAVE
 
@@ -209,9 +209,9 @@ class BitfieldMessage(PeerMessage):
 
 @dataclass(frozen=True)
 class Request(PeerMessage):
-    index: int
-    begin: int
-    length: int
+    index: PieceIndex
+    begin: BlockOffset
+    length: BlockLength
 
     id = PeerMessageId.REQUEST
 
@@ -225,9 +225,9 @@ class Request(PeerMessage):
 
 @dataclass(frozen=True)
 class Cancel(PeerMessage):
-    index: int
-    begin: int
-    length: int
+    index: PieceIndex
+    begin: BlockOffset
+    length: BlockLength
 
     id = PeerMessageId.CANCEL
 
@@ -243,8 +243,8 @@ class Cancel(PeerMessage):
 class Piece(PeerMessage):
     """A block of a piece"""
 
-    index: int
-    begin: int
+    index: PieceIndex
+    begin: BlockOffset
     block: bytes
 
     id = PeerMessageId.PIECE
@@ -322,13 +322,23 @@ class Bitfield:
         """
         return Bitfield(n_pieces, bytes(self.bits))
 
-    def __contains__(self, i: int) -> bool:
+    def __contains__(self, i: PieceIndex) -> bool:
         return 0 <= i < self.n and bool(self.bits[i >> 3] & (0x80 >> (i & 7)))
 
-    def add(self, i: int) -> None:
+    def add(self, i: PieceIndex) -> None:
         self.bits[i >> 3] |= 0x80 >> (i & 7)
 
-    def __iter__(self) -> Iterator[int]:
+    def discard(self, i: PieceIndex) -> None:
+        self.bits[i >> 3] &= ~(0x80 >> (i & 7)) & 0xFF
+
+    def intersects(self, other: Bitfield) -> bool:
+        """Whether the two have any piece in common. They have to be for the same torrent."""
+        if self.n != other.n:
+            raise ValueError(f"bitfields for {self.n} and {other.n} pieces")
+        # spare bits are never set in a bitfield we make, so they can't line up
+        return bool(int.from_bytes(self.bits) & int.from_bytes(other.bits))
+
+    def __iter__(self) -> Iterator[PieceIndex]:
         for byte_index, byte in enumerate(self.bits):
             if byte:
                 base = byte_index << 3

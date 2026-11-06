@@ -9,9 +9,9 @@ import anyio
 from torrent_models.types.v2 import BLOCK_SIZE
 
 from btmc.protocol.messages import Bitfield
+from btmc.types import BlockLength, BlockOffset, PieceIndex
 
-Block = tuple[int, int, int]
-"""piece, offset, length"""
+Block = tuple[PieceIndex, BlockOffset, BlockLength]
 
 PickerEvent = Literal["want"]
 """
@@ -46,11 +46,11 @@ class _WantedPiece:
 
     priority: int
     state: PieceState = PieceState.OPEN
-    blocks: dict[int, int] = field(default_factory=dict)
-    """offset -> length, once it's started"""
-    unrequested: dict[int, None] = field(default_factory=dict)
-    """Offsets of blocks nobody has been asked for, in order"""
-    received: set[int] = field(default_factory=set)
+    blocks: dict[BlockOffset, BlockLength] = field(default_factory=dict)
+    """Once it's started"""
+    unrequested: dict[BlockOffset, None] = field(default_factory=dict)
+    """Blocks nobody has been asked for, in order"""
+    received: set[BlockOffset] = field(default_factory=set)
 
 
 class PiecePicker:
@@ -78,16 +78,19 @@ class PiecePicker:
     """
 
     def __init__(
-        self, n_pieces: int, piece_size: Callable[[int], int], have: Bitfield | None = None
+        self,
+        n_pieces: int,
+        piece_size: Callable[[PieceIndex], int],
+        have: Bitfield | None = None,
     ):
         self.n_pieces = n_pieces
         self.piece_size = piece_size
         self.have = Bitfield(n_pieces) if have is None else have
         """Pieces that passed their hash check and were written. Only the picker changes it."""
-        self._wanted: dict[int, _WantedPiece] = {}
+        self._wanted: dict[PieceIndex, _WantedPiece] = {}
         """Wanted pieces we don't have yet, in the order they were first wanted"""
-        self._callbacks: dict[PickerEvent, list[Callable[[list[int]], None]]] = {"want": []}
-        self._done: dict[int, anyio.Event] = {}
+        self._callbacks: dict[PickerEvent, list[Callable[[list[PieceIndex]], None]]] = {"want": []}
+        self._done: dict[PieceIndex, anyio.Event] = {}
         """Set when the piece passes, for anyone waiting for it"""
         self._closed = False
 
@@ -96,14 +99,16 @@ class PiecePicker:
         """The number of wanted pieces we don't have yet"""
         return len(self._wanted)
 
-    def piece_state(self, index: int) -> PieceState:
+    def piece_state(self, index: PieceIndex) -> PieceState:
         if index in self.have:
             return PieceState.HAVE
         if (piece := self._wanted.get(index)) is not None:
             return piece.state
         return PieceState.UNWANTED
 
-    def add_callback(self, event: PickerEvent, callback: Callable[[list[int]], None]) -> None:
+    def add_callback(
+        self, event: PickerEvent, callback: Callable[[list[PieceIndex]], None]
+    ) -> None:
         """Call ``callback`` whenever ``event`` happens"""
         if event not in self._callbacks:
             raise ValueError(f"no such event: {event}")
@@ -111,7 +116,7 @@ class PiecePicker:
 
     # ---- wanting and waiting ----
 
-    def want(self, pieces: Iterable[int]) -> None:
+    def want(self, pieces: Iterable[PieceIndex]) -> None:
         """
         Mark the pieces as wanted.
 
@@ -121,7 +126,7 @@ class PiecePicker:
         for index in pieces:
             if not 0 <= index < self.n_pieces:
                 raise IndexError(f"piece {index} out of range, torrent has {self.n_pieces} pieces")
-        new = []
+        new: list[PieceIndex] = []
         for index in pieces:
             if index not in self.have and index not in self._wanted:
                 self._wanted[index] = _WantedPiece(DEFAULT_PRIORITY)
@@ -130,7 +135,7 @@ class PiecePicker:
             for callback in self._callbacks["want"]:
                 callback(new)
 
-    def is_wanted(self, index: int) -> bool:
+    def is_wanted(self, index: PieceIndex) -> bool:
         """Whether the piece is wanted and we don't have it yet"""
         return index in self._wanted
 
@@ -138,7 +143,7 @@ class PiecePicker:
         """Whether a peer with these pieces has any we want"""
         return any(index in has for index in self._wanted)
 
-    async def wait(self, pieces: Iterable[int]) -> None:
+    async def wait(self, pieces: Iterable[PieceIndex]) -> None:
         """
         Want the pieces, and return once we have all of them.
         Stopping waiting doesn't stop them being wanted.
@@ -163,7 +168,7 @@ class PiecePicker:
 
     # ---- checking ----
 
-    def passed(self, index: int) -> None:
+    def passed(self, index: PieceIndex) -> None:
         """A piece passed its hash check and was written"""
         self._checking(index)
         del self._wanted[index]
@@ -171,11 +176,11 @@ class PiecePicker:
         if (event := self._done.pop(index, None)) is not None:
             event.set()
 
-    def failed(self, index: int) -> None:
+    def failed(self, index: PieceIndex) -> None:
         """A piece failed its hash check, so fetch it again"""
         self._checking(index).state = PieceState.OPEN
 
-    def _checking(self, index: int) -> _WantedPiece:
+    def _checking(self, index: PieceIndex) -> _WantedPiece:
         piece = self._wanted.get(index)
         if piece is None or piece.state is not PieceState.CHECKING:
             raise ValueError(f"piece {index} isn't waiting for its hash check")
@@ -204,12 +209,12 @@ class PiecePicker:
         return self._take(first_open, piece)
 
     @staticmethod
-    def _take(index: int, piece: _WantedPiece) -> Block:
+    def _take(index: PieceIndex, piece: _WantedPiece) -> Block:
         begin = next(iter(piece.unrequested))
         del piece.unrequested[begin]
         return index, begin, piece.blocks[begin]
 
-    def received(self, index: int, begin: int, length: int) -> bool:
+    def received(self, index: PieceIndex, begin: BlockOffset, length: BlockLength) -> bool:
         """
         A block arrived. False if it isn't one we're waiting for: the wrong size,
         or here already. The piece is checking once its last block arrives.
@@ -228,8 +233,8 @@ class PiecePicker:
             piece.state = PieceState.CHECKING
         return True
 
-    def release_blocks(self, requests: Iterable[tuple[int, int]]) -> None:
-        """Put blocks, as (piece, offset), back up for grabs"""
+    def release_blocks(self, requests: Iterable[tuple[PieceIndex, BlockOffset]]) -> None:
+        """Put blocks back up for grabs"""
         for index, begin in requests:
             piece = self._wanted.get(index)
             if (
