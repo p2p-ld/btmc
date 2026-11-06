@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        # no windows: storage uses os.pwrite, and libtorrent's windows wheels are bugged
+        platform: [ "ubuntu-latest", "macos-latest" ]
+        # libtorrent, which the tests use as a peer, has no wheels for 3.14 yet
+        python-version: [ "3.12", "3.13" ]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Install python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install deps
+        run: |
+          python -m pip install pdm
+          pdm install --with tests
+      - name: Run tests
+        run: |
+          pdm run test
