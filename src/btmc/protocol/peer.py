@@ -132,6 +132,8 @@ class Peer:
         self._progress_at = now
         self._progress_bytes = 0
         self._connection = connection
+        self._run_scope: anyio.CancelScope | None = None
+        """Set once :meth:`.run` starts, so :meth:`.close` can stop it wherever it's got to"""
         self._outgoing, self._outgoing_reader = anyio.create_memory_object_stream[bytes](math.inf)
         """Encoded messages waiting to be sent. Closed when the connection should close."""
         self._outgoing.send_nowait(Handshake(info_hash, shared.peer_id).encode())
@@ -195,18 +197,19 @@ class Peer:
         """
         connection = self._connection
         try:
-            async with self.shared.connections:
-                self.shared.opened_connection()
+            with anyio.CancelScope() as self._run_scope:
                 if self.closed:
                     return
-                if connection is None:
-                    with anyio.fail_after(self.config.connect_timeout):
-                        connection = BufferedByteStream(await anyio.connect_tcp(*self.addr))
-                async with anyio.create_task_group() as tg:
-                    tg.start_soon(self._send_loop, connection, tg.cancel_scope)
-                    tg.start_soon(self._timeout_loop)
-                    await self._receive_loop(connection)
-                    tg.cancel_scope.cancel()
+                async with self.shared.connections:
+                    self.shared.opened_connection()
+                    if connection is None:
+                        with anyio.fail_after(self.config.connect_timeout):
+                            connection = BufferedByteStream(await anyio.connect_tcp(*self.addr))
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(self._send_loop, connection, tg.cancel_scope)
+                        tg.start_soon(self._timeout_loop)
+                        await self._receive_loop(connection)
+                        tg.cancel_scope.cancel()
         except PEER_ERRORS as e:
             # the loops handle their own errors, so this is from connecting
             self.close(CloseReason.CONNECT_FAILED, e)
@@ -328,7 +331,9 @@ class Peer:
 
     def close(self, reason: CloseReason, error: Exception | None = None) -> None:
         """
-        End the connection. Only the first reason given counts.
+        End the connection, and stop :meth:`.run` wherever it's got to:
+        waiting for a place in the connection limit, connecting, or connected.
+        Only the first reason given counts.
 
         Args:
             reason: why
@@ -340,6 +345,8 @@ class Peer:
             self._outgoing.close()
             self._outgoing_reader.close()
             self._release_requests()
+            if self._run_scope is not None:
+                self._run_scope.cancel()
 
     def _check_timeouts(self, now: float) -> None:
         """

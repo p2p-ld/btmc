@@ -1,0 +1,427 @@
+import contextlib
+import logging
+from collections import Counter
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, cast
+
+import anyio
+from anyio.abc import TaskGroup
+from anyio.streams.buffered import BufferedByteStream
+from torrent_models import Torrent
+from torrent_models.types import TorrentVersion
+
+from btmc.exceptions import TrackerError, TrackerRefused
+from btmc.protocol.messages import (
+    AnnounceEvent,
+    AnnounceRequest,
+    Bitfield,
+    BitfieldMessage,
+    Handshake,
+    Have,
+    Interested,
+    NotInterested,
+    PeerMessage,
+    Piece,
+    Request,
+    Unchoke,
+)
+from btmc.protocol.peer import CloseReason, Peer
+from btmc.protocol.picker import PiecePicker, PieceState
+from btmc.protocol.shared import Shared
+from btmc.protocol.tracker import announce
+from btmc.types import Addr, Block, PieceIndex
+
+log = logging.getLogger(__name__)
+
+type SwarmEvent = Literal["block"]
+"""
+What callbacks can be added for, see :meth:`.Swarm.add_callback`
+
+- ``"block"``: a block we asked for arrived. Called with the block, its data,
+  and the address of the peer that sent it.
+"""
+
+type BlockCallback = Callable[[Block, bytes, Addr], None]
+
+
+@dataclass
+class _Candidate:
+    """A peer we could connect to"""
+
+    info_hashes: list[bytes]
+    failures: int = 0
+    retry_at: float = 0
+
+
+class Swarm:
+    """
+    Manages the peers of one torrent
+
+    Handles announcing, connecting and creating peers from the listener socket.
+    Distributes wanted blocks and pieces from the :class:`.PiecePicker`,
+    and forwards blocks up to the :class:`.TorrentState` for storage and checking.
+
+    Does resource management, ensuring that checked-out connections
+    don't get stuck on inactive peers.
+
+    Treats the v1 and v2 swarms of a hybrid torrent as interchangeable,
+    depending on what peers support.
+
+    Its tasks, all in one task group until it's stopped:
+
+    - one per connection, running the peer, which connects, hands each message that arrives
+      to :meth:`._handle_message` and the requests it won't answer to :meth:`._released`,
+      and closes itself
+    - one per tracker and info hash, announcing while anything is wanted
+    - a heartbeat, every :attr:`.Config.connect_interval`, for what depends on time:
+      retrying peers whose backoff has run out, and giving up connections
+      other torrents are waiting for
+
+    Args:
+        torrent: the torrent
+        picker: the torrent's pieces
+        shared: what this torrent shares with the client's other torrents
+        trackers: tracker tiers to use instead of the torrent's own
+        known_peers: peers to connect to without asking a tracker
+    """
+
+    def __init__(
+        self,
+        torrent: Torrent[Any],
+        picker: PiecePicker,
+        shared: Shared,
+        *,
+        trackers: list[list[str]] | None = None,
+        known_peers: Sequence[Addr] = (),
+    ):
+        self.picker = picker
+        picker.add_callback(PieceState.OPEN, self._opened)
+        picker.add_callback(PieceState.HAVE, self._had)
+        self.shared = shared
+        shared.add_callback("ban", self._banned)
+
+        self.config = shared.config
+        self.n_pieces = torrent.layout.n_pieces
+        self.piece_length = torrent.info.piece_length
+        self.info_hashes = info_hashes(torrent)
+        tiers = torrent.flat_trackers if trackers is None else trackers
+        self.trackers = list(dict.fromkeys(url for tier in tiers for url in tier))
+        """
+        Every tracker's url. We announce to all of them at once, like qBittorrent,
+        rather than one tier at a time.
+        """
+
+        self.peers: dict[Addr, Peer] = {}
+        self.announced: set[tuple[str, bytes]] = set()
+        """(tracker, info hash) that know about us, so need telling when we stop"""
+        self.connections_made = 0
+        self.bytes_from: Counter[Addr] = Counter()
+
+        self._callbacks: dict[SwarmEvent, list[BlockCallback]] = {"block": []}
+        self._candidates: dict[Addr, _Candidate] = {}
+        self._tg: TaskGroup | None = None
+        self._stopping = False
+        self._stopped = anyio.Event()
+
+        for addr in known_peers:
+            for info_hash in self.info_hashes:
+                self.add_candidate(addr, info_hash)
+
+    def add_callback(self, event: SwarmEvent, callback: BlockCallback) -> None:
+        """Call ``callback`` whenever ``event`` happens"""
+        self._callbacks[event].append(callback)
+
+    async def run(self) -> None:
+        """Run until stopped, then tell the trackers we stopped"""
+        try:
+            async with anyio.create_task_group() as self._tg:
+                if self._stopping:
+                    self._tg.cancel_scope.cancel()
+                for url in self.trackers:
+                    for info_hash in self.info_hashes:
+                        self._tg.start_soon(self._announce_loop, url, info_hash)
+                self._connect(anyio.current_time())
+                while True:
+                    await anyio.sleep(self.config.connect_interval)
+                    self._heartbeat(anyio.current_time())
+        finally:
+            self._tg = None
+            # the client's other torrents can still ban peers after this one is gone
+            self.shared.remove_callback("ban", self._banned)
+            with anyio.CancelScope(shield=True):
+                await self._announce_all_stopped()
+            self._stopped.set()
+
+    async def stop(self) -> None:
+        """Close every connection, and tell the trackers we stopped"""
+        self._stopping = True
+        if self._tg is not None:
+            self._tg.cancel_scope.cancel()
+        await self._stopped.wait()
+
+    def accept_connection(
+        self, connection: BufferedByteStream, addr: Addr, handshake: Handshake
+    ) -> bool:
+        """
+        Take an incoming connection, whose handshake was read already.
+        False if we don't want it. Raises PeerError if we can't accept the handshake.
+        """
+        if not self._should_connect(addr):
+            return False
+        now = anyio.current_time()
+        self._start_peer(
+            Peer.from_incoming(addr, handshake, self.n_pieces, self.shared, now, connection)
+        )
+        return True
+
+    def _heartbeat(self, now: float) -> None:
+        self._give_up_connections()
+        self._connect(now)
+
+    def _connect(self, now: float) -> None:
+        """Connect to the candidates that are ready, while we want more connections"""
+        for addr, info_hash in self._ready_candidates(now):
+            if self._should_connect(addr):
+                self._start_peer(Peer(addr, info_hash, self.n_pieces, self.shared, now))
+
+    def _give_up_connections(self) -> None:
+        """If nothing is wanted and other torrents are waiting for a connection, close ours"""
+        if not self.picker.n_wanted and self.shared.connections.statistics().tasks_waiting:
+            for peer in self.peers.values():
+                self.remove_peer(peer, CloseReason.NEEDED_ELSEWHERE)
+
+    # ---- peers ----
+
+    def add_candidate(self, addr: Addr, info_hash: bytes) -> None:
+        """A peer we could connect to, in the swarm for an info hash"""
+        if self.shared.is_banned(addr):
+            return
+        candidate = self._candidates.setdefault(addr, _Candidate(info_hashes=[]))
+        if info_hash not in candidate.info_hashes:
+            candidate.info_hashes.append(info_hash)
+            candidate.info_hashes.sort(key=self.info_hashes.index)
+
+    def remove_peer(self, peer: Peer, reason: CloseReason) -> None:
+        """Close a connection. It's forgotten once it has finished closing."""
+        peer.close(reason)
+
+    def _peer_ended(self, peer: Peer, now: float) -> None:
+        """A connection ended: forget it, and wait before trying the peer again"""
+        del self.peers[peer.addr]
+        candidate = self._candidates.get(peer.addr)
+        if candidate is None or not peer.penalize:
+            return
+        if peer.received:
+            candidate.failures = 0
+            candidate.retry_at = now + self.config.peer_retry
+        else:
+            candidate.failures += 1
+            candidate.retry_at = now + self.config.peer_backoff * 2**candidate.failures
+            if candidate.failures > self.config.max_peer_failures:
+                del self._candidates[peer.addr]
+
+    def _ready_candidates(self, now: float) -> list[tuple[Addr, bytes]]:
+        """
+        Candidates whose wait after their last connection is over, fewest failures first,
+        and the info hash to use with each
+        """
+        ready = sorted(
+            (c.failures, addr) for addr, c in self._candidates.items() if c.retry_at <= now
+        )
+        connect = []
+        for failures, addr in ready:
+            hashes = self._candidates[addr].info_hashes
+            # if a peer is in both swarms and fails on one hash, try the other next time
+            connect.append((addr, hashes[failures % len(hashes)]))
+        return connect
+
+    def _should_connect(self, addr: Addr) -> bool:
+        """Whether to open a connection with a peer, whichever side starts it"""
+        return (
+            self._tg is not None
+            and self.picker.n_wanted > 0
+            and len(self.peers) < self.config.max_peers
+            and addr not in self.peers
+            and not self.shared.is_banned(addr)
+        )
+
+    def _start_peer(self, peer: Peer) -> None:
+        assert self._tg is not None
+        peer.add_callback("message", self._handle_message)
+        peer.add_callback("released", self._released)
+        self.peers[peer.addr] = peer
+        self.connections_made += 1
+        self._tg.start_soon(self._run_peer, peer)
+
+    async def _run_peer(self, peer: Peer) -> None:
+        """Run a connection to a peer until it closes, then connect to another one"""
+        try:
+            await peer.run()
+        finally:
+            self._peer_ended(peer, anyio.current_time())
+            log.debug("%s closed: %s %r", peer, peer.close_reason, peer.close_error)
+        # not reached when we're stopping, since run raises the cancellation
+        self._connect(anyio.current_time())
+
+    # --- callbacks ---
+
+    def _opened(self, pieces: list[PieceIndex]) -> None:
+        """
+        Pieces are open to fetch, because they were just wanted or failed their check:
+        tell the peers that have any of them we're interested, ask them for blocks, and connect
+        """
+        opened = Bitfield(self.n_pieces)
+        for index in pieces:
+            opened.add(index)
+        for peer in self.peers.values():
+            if opened.intersects(peer.has):
+                self._update_interest(peer)
+                self._fill(peer)
+        self._connect(anyio.current_time())
+
+    def _had(self, pieces: list[PieceIndex]) -> None:
+        self._give_up_connections()
+
+    def _banned(self, addr: Addr) -> None:
+        self._candidates.pop(addr, None)
+        if (peer := self.peers.get(addr)) is not None:
+            self.remove_peer(peer, CloseReason.BANNED)
+
+    def _released(self, peer: Peer, blocks: list[Block]) -> None:
+        """A peer won't send blocks we asked it for, so ask the other peers"""
+        self.picker.release_blocks(blocks)
+        for other in self.peers.values():
+            self._fill(other)
+
+    def _handle_message(self, peer: Peer, msg: PeerMessage) -> None:
+        """Handle a message from a peer. A piece this completes goes on the queue to be checked."""
+        match msg:
+            case Unchoke():
+                self._fill(peer)
+            case Have(index=index):
+                if not peer.interested and self.picker.is_wanted(index):
+                    peer.send(Interested())
+                self._fill(peer)
+            case BitfieldMessage():
+                self._update_interest(peer)
+            case Piece(index=index, begin=begin, block=data):
+                self.bytes_from[peer.addr] += len(data)
+                for callback in self._callbacks["block"]:
+                    callback(Block(index, begin, len(data)), data, peer.addr)
+                self._fill(peer)
+
+    def _update_interest(self, peer: Peer) -> None:
+        interested = self.picker.peer_has_wanted_pieces(peer.has)
+        if interested != peer.interested:
+            peer.send(Interested() if interested else NotInterested())
+
+    def _fill(self, peer: Peer) -> None:
+        """Request blocks until the peer's pipeline is full or it has nothing we want"""
+        if peer.choked or not peer.interested or peer.closed:
+            return
+        while len(peer.requests) < self.config.pipeline_depth:
+            block = self.picker.pick(peer.has)
+            if block is None:
+                if not peer.requests:
+                    self._update_interest(peer)
+                return
+            peer.send(Request(*block))
+
+    # --- trackers ---
+
+    async def _announce_loop(self, url: str, info_hash: bytes) -> None:
+        """
+        Announce to a tracker every so often while anything is wanted.
+        While nothing is wanted, just sleep.
+        Then apply any tracker backoffs, and announce that thing.
+        If we stop wanting more pieces, also sends a 'stopped' message to the tracker
+        """
+        while True:
+            await self.picker.wait_for_wanted()
+            await anyio.sleep_until(self.shared.tracker_ready_at(url))
+            await anyio.sleep(await self._announce(url, info_hash))
+            if not self.picker.n_wanted and (url, info_hash) in self.announced:
+                await self._announce_stopped(url, info_hash)
+
+    async def _announce(self, url: str, info_hash: bytes) -> float:
+        """
+        Announce to a tracker, saying we started if it doesn't know about us yet,
+        and return how long to wait before announcing again
+        """
+        started = (url, info_hash) in self.announced
+        event = AnnounceEvent.NONE if started else AnnounceEvent.STARTED
+        request = self._announce_request(info_hash, event)
+        try:
+            async with self.shared.announces:
+                response = await announce(url, request, http=self.shared.http, config=self.config)
+        except TrackerRefused as e:
+            log.debug("%s refused %s: %s", url, info_hash.hex(), e)
+            self.shared.announced(url, anyio.current_time())
+            return self.config.announce_retry
+        except TrackerError as e:
+            log.debug("announce to %s failed: %s", url, e)
+            self.shared.announced(url, anyio.current_time(), answered=False)
+            # the tracker's backoff, shared with the other torrents, says when to try again
+            return 0
+        self.shared.announced(url, anyio.current_time())
+        log.debug("%s gave %d peers for %s", url, len(response.peers), info_hash.hex())
+        self.announced.add((url, info_hash))
+        for addr in response.peers:
+            self.add_candidate(addr, info_hash)
+        self._connect(anyio.current_time())
+        if response.interval is None:
+            return self.config.announce_retry
+        return min(
+            max(response.interval, self.config.min_announce_interval),
+            self.config.max_announce_interval,
+        )
+
+    async def _announce_stopped(self, url: str, info_hash: bytes) -> None:
+        request = self._announce_request(info_hash, AnnounceEvent.STOPPED)
+        with contextlib.suppress(TrackerError):
+            await announce(url, request, http=self.shared.http, config=self.config)
+        self.announced.discard((url, info_hash))
+
+    async def _announce_all_stopped(self) -> None:
+        with anyio.move_on_after(self.config.stopped_announce_timeout):
+            async with anyio.create_task_group() as tg:
+                for url, info_hash in list(self.announced):
+                    tg.start_soon(self._announce_stopped, url, info_hash)
+
+    def _announce_request(self, info_hash: bytes, event: AnnounceEvent) -> AnnounceRequest:
+        left = (self.n_pieces - self.picker.have.count()) * self.piece_length
+        return AnnounceRequest(
+            info_hash=info_hash,
+            peer_id=self.shared.peer_id,
+            port=self.shared.port,
+            downloaded=sum(self.bytes_from.values()),
+            left=max(left, 0),
+            event=event,
+            numwant=self.config.numwant,
+        )
+
+
+def wire_hash(info_hash: str | bytes) -> bytes:
+    """
+    Any info hash, as bytes or hex, v1 or v2, whole or truncated,
+    as the 20 bytes used on the wire
+    """
+    if isinstance(info_hash, str):
+        info_hash = bytes.fromhex(info_hash)
+    return info_hash[:20]
+
+
+def info_hashes(torrent: Torrent[Any]) -> list[bytes]:
+    """
+    The info hashes of the torrent's swarms, as used in handshakes and announces,
+    see :func:`.wire_hash`.
+
+    v2 first, so peers that turn up in both of a hybrid's swarms get the v2 hash.
+    """
+    hashes = []
+    if torrent.torrent_version != TorrentVersion.v1:
+        hashes.append(wire_hash(cast(str, torrent.v2_infohash)))
+    if torrent.torrent_version != TorrentVersion.v2:
+        hashes.append(wire_hash(cast(str, torrent.v1_infohash)))
+    return hashes

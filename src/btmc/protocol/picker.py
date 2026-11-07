@@ -3,21 +3,17 @@
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Any
 
 import anyio
+from torrent_models.layout import FileLayout
 from torrent_models.types.v2 import BLOCK_SIZE
 
 from btmc.protocol.messages import Bitfield
 from btmc.types import Block, BlockLength, BlockOffset, PieceIndex
 
-type PickerEvent = Literal["want"]
-"""
-What callbacks can be added for, see :meth:`.PiecePicker.add_callback`
-
-- ``"want"``: more pieces are wanted. Called with the ones just wanted, in order,
-  leaving out any wanted already or that we have.
-"""
+type PieceCallback = Callable[[list[PieceIndex]], None]
+"""Called with pieces that just entered a state, see :meth:`.PiecePicker.add_callback`"""
 
 DEFAULT_PRIORITY = 1
 
@@ -67,29 +63,30 @@ class PiecePicker:
     A piece that fails its hash check keeps its place.
 
     Each block is asked of one peer at a time, and goes back up for grabs
-    when it's :meth:`.unrequest` ed, like when that peer chokes us or goes away.
+    when it's released with :meth:`.release_blocks`, like when that peer chokes us
+    or goes away.
+
+    Padfiles at the end of a piece are all zeros, so they're never asked for (BEP 47).
+
+    Callbacks added with :meth:`.add_callback` hear about pieces entering a state.
 
     Args:
-        n_pieces: the number of pieces in the torrent
-        piece_size: the number of bytes in a piece, from its index
+        layout: the torrent's pieces and files
         have: the pieces we have already
     """
 
-    def __init__(
-        self,
-        n_pieces: int,
-        piece_size: Callable[[PieceIndex], int],
-        have: Bitfield | None = None,
-    ):
-        self.n_pieces = n_pieces
-        self.piece_size = piece_size
-        self.have = Bitfield(n_pieces) if have is None else have
+    def __init__(self, layout: FileLayout[Any], have: Bitfield | None = None):
+        self.n_pieces = layout.n_pieces
+        self._layout = layout
+        self.have = Bitfield(self.n_pieces) if have is None else have
         """Pieces that passed their hash check and were written. Only the picker changes it."""
         self._wanted: dict[PieceIndex, _WantedPiece] = {}
         """Wanted pieces we don't have yet, in the order they were first wanted"""
-        self._callbacks: dict[PickerEvent, list[Callable[[list[PieceIndex]], None]]] = {"want": []}
+        self._callbacks: dict[PieceState, list[PieceCallback]] = {state: [] for state in PieceState}
         self._done: dict[PieceIndex, anyio.Event] = {}
         """Set when the piece passes, for anyone waiting for it"""
+        self._has_wanted = anyio.Event()
+        """Set while anything is wanted, and replaced with a new one when nothing is"""
         self._closed = False
 
     @property
@@ -104,13 +101,16 @@ class PiecePicker:
             return piece.state
         return PieceState.UNWANTED
 
-    def add_callback(
-        self, event: PickerEvent, callback: Callable[[list[PieceIndex]], None]
-    ) -> None:
-        """Call ``callback`` whenever ``event`` happens"""
-        if event not in self._callbacks:
-            raise ValueError(f"no such event: {event}")
-        self._callbacks[event].append(callback)
+    def add_callback(self, state: PieceState, callback: PieceCallback) -> None:
+        """
+        Call ``callback`` with pieces whenever they enter ``state``.
+        Pieces wanted together come in one call, in the order they were wanted.
+        """
+        self._callbacks[state].append(callback)
+
+    def _entered(self, state: PieceState, pieces: list[PieceIndex]) -> None:
+        for callback in self._callbacks[state]:
+            callback(pieces)
 
     # ---- wanting and waiting ----
 
@@ -130,8 +130,12 @@ class PiecePicker:
                 self._wanted[index] = _WantedPiece(DEFAULT_PRIORITY)
                 new.append(index)
         if new:
-            for callback in self._callbacks["want"]:
-                callback(new)
+            self._has_wanted.set()
+            self._entered(PieceState.OPEN, new)
+
+    async def wait_for_wanted(self) -> None:
+        """Return once anything is wanted, right away if something is already"""
+        await self._has_wanted.wait()
 
     def is_wanted(self, index: PieceIndex) -> bool:
         """Whether the piece is wanted and we don't have it yet"""
@@ -170,13 +174,17 @@ class PiecePicker:
         """A piece passed its hash check and was written"""
         self._checking(index)
         del self._wanted[index]
+        if not self._wanted:
+            self._has_wanted = anyio.Event()
         self.have.add(index)
         if (event := self._done.pop(index, None)) is not None:
             event.set()
+        self._entered(PieceState.HAVE, [index])
 
     def failed(self, index: PieceIndex) -> None:
         """A piece failed its hash check, so fetch it again"""
         self._checking(index).state = PieceState.OPEN
+        self._entered(PieceState.OPEN, [index])
 
     def _checking(self, index: PieceIndex) -> _WantedPiece:
         piece = self._wanted.get(index)
@@ -188,23 +196,27 @@ class PiecePicker:
 
     def pick(self, has: Bitfield) -> Block | None:
         """The next block to ask a peer for, if it has any we want"""
-        first_open = None
         for index, piece in self._wanted.items():
-            if index not in has:
-                continue
-            if piece.state is PieceState.DOWNLOADING and piece.unrequested:
+            if index in has and piece.state is PieceState.DOWNLOADING and piece.unrequested:
                 return self._take(index, piece)
-            if piece.state is PieceState.OPEN and first_open is None:
-                first_open = index
-        if first_open is None:
-            return None
-        piece = self._wanted[first_open]
-        size = self.piece_size(first_open)
+        for index, piece in self._wanted.items():
+            if index in has and piece.state is PieceState.OPEN and self._start(index, piece):
+                return self._take(index, piece)
+        return None
+
+    def _start(self, index: PieceIndex, piece: _WantedPiece) -> bool:
+        """
+        Split a piece into the blocks to ask for, leaving out the padfiles at its end.
+        False if it's all padding, so there's nothing to ask for and it's checking already.
+        """
+        piece_range = self._layout.piece_range(index)
+        size = piece_range.size - piece_range.padding
         piece.blocks = {b: min(BLOCK_SIZE, size - b) for b in range(0, size, BLOCK_SIZE)}
         piece.unrequested = dict.fromkeys(piece.blocks)
         piece.received = set()
-        piece.state = PieceState.DOWNLOADING
-        return self._take(first_open, piece)
+        piece.state = PieceState.DOWNLOADING if piece.blocks else PieceState.CHECKING
+        self._entered(piece.state, [index])
+        return bool(piece.blocks)
 
     @staticmethod
     def _take(index: PieceIndex, piece: _WantedPiece) -> Block:
@@ -229,6 +241,7 @@ class PiecePicker:
         piece.unrequested.pop(block.begin, None)
         if len(piece.received) == len(piece.blocks):
             piece.state = PieceState.CHECKING
+            self._entered(PieceState.CHECKING, [block.piece])
         return True
 
     def release_blocks(self, blocks: Iterable[Block]) -> None:
