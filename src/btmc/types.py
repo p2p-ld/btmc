@@ -11,6 +11,17 @@ type BlockLength = int
 """The number of bytes in a block"""
 
 
+class Block(NamedTuple):
+    """
+    A block of a piece, the unit we ask peers for.
+    The fields are in the same order as the ``request`` message's.
+    """
+
+    piece: PieceIndex
+    begin: BlockOffset
+    length: BlockLength
+
+
 class Addr(NamedTuple):
     host: str
     port: int

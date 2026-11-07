@@ -33,11 +33,6 @@ class Config:
     """Requests in flight per peer, in 16 KiB blocks"""
     announce_concurrency: int = 16
     """Announces in progress at once, across all torrents"""
-    torrent_idle_timeout: float | None = 300
-    """
-    How long a torrent can go without wanting anything before it closes its connections
-    and stops announcing. ``None`` keeps them open, and can't be set from TOML.
-    """
 
     # ---- peers ----
 
@@ -47,6 +42,8 @@ class Config:
     """How long pending requests can go without a block arriving, before giving up on the peer"""
     peer_idle_timeout: float = 240
     """How long a peer can go without sending anything, when we're not waiting on it"""
+    timeout_check_interval: float = 5
+    """How often each peer checks the timeouts above, so how late they can be"""
     keepalive_interval: float = 60
     connect_interval: float = 5
     """How often to look for peers to connect to, when nothing else prompts it"""

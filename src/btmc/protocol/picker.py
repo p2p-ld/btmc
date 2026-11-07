@@ -9,11 +9,9 @@ import anyio
 from torrent_models.types.v2 import BLOCK_SIZE
 
 from btmc.protocol.messages import Bitfield
-from btmc.types import BlockLength, BlockOffset, PieceIndex
+from btmc.types import Block, BlockLength, BlockOffset, PieceIndex
 
-Block = tuple[PieceIndex, BlockOffset, BlockLength]
-
-PickerEvent = Literal["want"]
+type PickerEvent = Literal["want"]
 """
 What callbacks can be added for, see :meth:`.PiecePicker.add_callback`
 
@@ -212,34 +210,34 @@ class PiecePicker:
     def _take(index: PieceIndex, piece: _WantedPiece) -> Block:
         begin = next(iter(piece.unrequested))
         del piece.unrequested[begin]
-        return index, begin, piece.blocks[begin]
+        return Block(index, begin, piece.blocks[begin])
 
-    def received(self, index: PieceIndex, begin: BlockOffset, length: BlockLength) -> bool:
+    def received(self, block: Block) -> bool:
         """
         A block arrived. False if it isn't one we're waiting for: the wrong size,
         or here already. The piece is checking once its last block arrives.
         """
-        piece = self._wanted.get(index)
+        piece = self._wanted.get(block.piece)
         if (
             piece is None
             or piece.state is not PieceState.DOWNLOADING
-            or begin in piece.received
-            or piece.blocks.get(begin) != length
+            or block.begin in piece.received
+            or piece.blocks.get(block.begin) != block.length
         ):
             return False
-        piece.received.add(begin)
-        piece.unrequested.pop(begin, None)
+        piece.received.add(block.begin)
+        piece.unrequested.pop(block.begin, None)
         if len(piece.received) == len(piece.blocks):
             piece.state = PieceState.CHECKING
         return True
 
-    def release_blocks(self, requests: Iterable[tuple[PieceIndex, BlockOffset]]) -> None:
+    def release_blocks(self, blocks: Iterable[Block]) -> None:
         """Put blocks back up for grabs"""
-        for index, begin in requests:
-            piece = self._wanted.get(index)
+        for block in blocks:
+            piece = self._wanted.get(block.piece)
             if (
                 piece is not None
                 and piece.state is PieceState.DOWNLOADING
-                and begin not in piece.received
+                and block.begin not in piece.received
             ):
-                piece.unrequested[begin] = None
+                piece.unrequested[block.begin] = None
