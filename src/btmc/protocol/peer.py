@@ -58,22 +58,28 @@ class CloseReason(StrEnum):
         return self not in (CloseReason.NEEDED_ELSEWHERE, CloseReason.STOPPING)
 
 
-type PeerEvent = Literal["message", "released"]
+type PeerEvent = Literal["message", "released", "connected", "disconnected"]
 """
 What callbacks can be added for, see :meth:`.Peer.add_callback`
 
 - ``"message"``: a message arrived that changes something. Called with the peer and the message.
 - ``"released"``: the peer won't answer requests we made, because it choked us or the
   connection closed. Called with the peer and the blocks we'd asked for, in order.
+- ``"connected"``: both handshakes are done, so messages can go back and forth.
+  Called with the peer.
+- ``"disconnected"``: a connection that was ``"connected"`` ended. Called with the peer.
 """
 
 type MessageCallback = Callable[[Peer, PeerMessage], None]
 type ReleasedCallback = Callable[[Peer, list[Block]], None]
+type ConnectionCallback = Callable[[Peer], None]
 
 
 class _Callbacks(TypedDict):
     message: list[MessageCallback]
     released: list[ReleasedCallback]
+    connected: list[ConnectionCallback]
+    disconnected: list[ConnectionCallback]
 
 
 class Peer:
@@ -137,7 +143,12 @@ class Peer:
         self._outgoing, self._outgoing_reader = anyio.create_memory_object_stream[bytes](math.inf)
         """Encoded messages waiting to be sent. Closed when the connection should close."""
         self._outgoing.send_nowait(Handshake(info_hash, shared.peer_id).encode())
-        self._callbacks: _Callbacks = {"message": [], "released": []}
+        self._callbacks: _Callbacks = {
+            "message": [],
+            "released": [],
+            "connected": [],
+            "disconnected": [],
+        }
 
     @classmethod
     def from_incoming(
@@ -179,7 +190,14 @@ class Peer:
     @overload
     def add_callback(self, event: Literal["released"], callback: ReleasedCallback) -> None: ...
 
-    def add_callback(self, event: PeerEvent, callback: MessageCallback | ReleasedCallback) -> None:
+    @overload
+    def add_callback(
+        self, event: Literal["connected", "disconnected"], callback: ConnectionCallback
+    ) -> None: ...
+
+    def add_callback(
+        self, event: PeerEvent, callback: MessageCallback | ReleasedCallback | ConnectionCallback
+    ) -> None:
         """Call ``callback`` whenever ``event`` happens"""
         if event not in self._callbacks:
             raise ValueError(f"no such event: {event}")
@@ -227,15 +245,21 @@ class Peer:
             if self.remote_peer_id is None:
                 handshake = Handshake.decode(await connection.receive_exactly(Handshake.LENGTH))
                 self._receive_handshake(handshake, anyio.current_time())
-            while not self.closed:
-                length = int.from_bytes(await connection.receive_exactly(4))
-                if length > MAX_MESSAGE:
-                    raise PeerError(f"message of {length} bytes is too long")
-                data = length.to_bytes(4) + await connection.receive_exactly(length)
-                msg = self._receive(PeerMessage.decode(data), anyio.current_time())
-                if msg is not None:
-                    for callback in self._callbacks["message"]:
-                        callback(self, msg)
+            for callback in self._callbacks["connected"]:
+                callback(self)
+            try:
+                while not self.closed:
+                    length = int.from_bytes(await connection.receive_exactly(4))
+                    if length > MAX_MESSAGE:
+                        raise PeerError(f"message of {length} bytes is too long")
+                    data = length.to_bytes(4) + await connection.receive_exactly(length)
+                    msg = self._receive(PeerMessage.decode(data), anyio.current_time())
+                    if msg is not None:
+                        for message_callback in self._callbacks["message"]:
+                            message_callback(self, msg)
+            finally:
+                for callback in self._callbacks["disconnected"]:
+                    callback(self)
         except PeerError as e:
             self.close(CloseReason.PROTOCOL_ERROR, e)
         except PEER_ERRORS as e:

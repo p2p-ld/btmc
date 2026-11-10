@@ -1,5 +1,5 @@
-import contextlib
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 from torrent_models.types.v1 import V1PieceRange
@@ -27,7 +27,8 @@ class PieceStore:
 
     Files are created sparse, on first write. Which pieces we have is kept in a small
     resume file next to the data, so they aren't fetched again.
-    The resume file is trusted as-is, without rechecking the data.
+    The resume file is trusted as-is, without rechecking the data. Without one,
+    whatever data is already there is checked with :meth:`.read_piece`, to make one.
 
     Reading and writing block, so run them in a worker thread.
     Pieces can be written from several threads at once, since they never overlap,
@@ -41,18 +42,22 @@ class PieceStore:
         self.resume_path = self.root / f".{name}.have"
         self._paths: dict[str, Path] = {}
 
-    def load_have(self) -> Bitfield:
-        """The pieces we had last time, from the resume file, which is made if it isn't there"""
-        have = Bitfield(self.n_pieces)
-        if self.resume_path.exists():
-            with contextlib.suppress(ValueError):
-                have = Bitfield(self.n_pieces, self.resume_path.read_bytes())
-        self.resume_path.write_bytes(have.bits)
-        return have
+    def load_have(self) -> Bitfield | None:
+        """The pieces we had last time, from the resume file, or None if there isn't a good one"""
+        try:
+            return Bitfield(self.n_pieces, self.resume_path.read_bytes())
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def create_resume(self, have: Bitfield) -> None:
+        """Write a new resume file, saying we have these pieces"""
+        tmp = self.resume_path.with_name(self.resume_path.name + ".tmp")
+        tmp.write_bytes(have.bits)
+        os.replace(tmp, self.resume_path)
 
     def save_have(self, index: int) -> None:
         """
-        Save that we have a piece to the resume file, made by :meth:`.load_have`.
+        Save that we have a piece to the resume file, made by :meth:`.create_resume`.
         Reads and rewrites the byte holding the piece's bit, so call it from one thread at a time.
         """
         fd = os.open(self.resume_path, os.O_RDWR)
@@ -67,6 +72,29 @@ class PieceStore:
         if full_path not in self._paths:
             self._paths[full_path] = safe_join(self.root, full_path)
         return self._paths[full_path]
+
+    def any_exist(self, full_paths: Iterable[str]) -> bool:
+        """Whether any of these files in the torrent are on disk"""
+        return any(self.path(full_path).exists() for full_path in full_paths)
+
+    def read_piece(self, piece: V1PieceRange | V2PieceRange) -> list[bytes] | None:
+        """
+        A piece's data, from the files it covers, with zeros for padfiles,
+        or None if any of it isn't on disk
+        """
+        try:
+            if isinstance(piece, V2PieceRange):
+                return [self.read(piece.full_path, piece.range_start, piece.range_end)]
+            return [
+                (
+                    bytes(f.range_end - f.range_start)
+                    if f.is_padfile
+                    else self.read(f.full_path, f.range_start, f.range_end)
+                )
+                for f in piece.ranges
+            ]
+        except (FileNotFoundError, EOFError):
+            return None
 
     def write(self, piece: V1PieceRange | V2PieceRange, blocks: list[bytes]) -> None:
         """Write a verified piece into the files it covers"""

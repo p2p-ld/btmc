@@ -2,9 +2,9 @@
 
 import contextlib
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import anyio
 import httpx
@@ -16,12 +16,22 @@ from btmc.config import Config
 from btmc.protocol.messages import Bitfield, Handshake
 from btmc.protocol.peer import PEER_ERRORS
 from btmc.protocol.shared import Shared
-from btmc.protocol.swarm import wire_hash
-from btmc.protocol.torrent import TorrentState, torrent_name
+from btmc.protocol.torrent import TorrentState
 from btmc.types import Addr, PieceIndex
+from btmc.utils import torrent_name, wire_hash
 
 PEER_ID_PREFIX = b"-SC0001-"
 """The start of our peer id, which tells peers what client we are"""
+
+type ClientEvent = Literal["added", "removed"]
+"""
+What callbacks can be added for, see :meth:`.Client.add_callback`
+
+- ``"added"``: a torrent was added. Called with the torrent.
+- ``"removed"``: a torrent was removed or stopped running. Called with the torrent.
+"""
+
+type TorrentCallback = Callable[[TorrentState], None]
 
 
 class Client:
@@ -58,6 +68,7 @@ class Client:
         self._tg: TaskGroup | None = None
         self._started = anyio.Event()
         self._stopped = anyio.Event()
+        self._callbacks: dict[ClientEvent, list[TorrentCallback]] = {"added": [], "removed": []}
 
     async def __aenter__(self) -> "Client":
         await self.start()
@@ -129,6 +140,14 @@ class Client:
     def peak_connections(self) -> int:
         return self._shared.peak_connections if self._shared is not None else 0
 
+    def add_callback(self, event: ClientEvent, callback: TorrentCallback) -> None:
+        """Call ``callback`` whenever ``event`` happens"""
+        self._callbacks[event].append(callback)
+
+    def remove_callback(self, event: ClientEvent, callback: TorrentCallback) -> None:
+        """Stop calling a callback, like when whatever added it goes away before the client"""
+        self._callbacks[event].remove(callback)
+
     # ---- torrents ----
 
     @property
@@ -167,6 +186,8 @@ class Client:
         for info_hash in t.info_hashes:
             self._by_hash[info_hash] = t
         self._tg.start_soon(self._run, t)
+        for callback in self._callbacks["added"]:
+            callback(t)
         return t
 
     def get(self, info_hash: str | bytes) -> TorrentState | None:
@@ -187,10 +208,15 @@ class Client:
             self._forget(t)
 
     def _forget(self, t: TorrentState) -> None:
+        # removing a torrent forgets it, and so does it stopping running afterwards
+        if t not in self._torrents:
+            return
         self._torrents.discard(t)
         for info_hash in t.info_hashes:
             if self._by_hash.get(info_hash) is t:
                 del self._by_hash[info_hash]
+        for callback in self._callbacks["removed"]:
+            callback(t)
 
     # ---- fetching ----
 
@@ -209,6 +235,10 @@ class Client:
     async def read(self, t: TorrentState, path: str, start: int, end: int) -> bytes:
         """See :meth:`.TorrentState.read`"""
         return await t.read(path, start, end)
+
+    async def fetch_file(self, t: TorrentState, path: str) -> Path:
+        """See :meth:`.TorrentState.fetch_file`"""
+        return await t.fetch_file(path)
 
     # ---- incoming connections ----
 

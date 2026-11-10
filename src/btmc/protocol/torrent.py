@@ -7,7 +7,7 @@ import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import anyio
 from anyio.streams.buffered import BufferedByteStream
@@ -19,6 +19,7 @@ from btmc.protocol.shared import Shared
 from btmc.protocol.swarm import Swarm
 from btmc.storage import PieceStore
 from btmc.types import Addr, Block, BlockOffset, PieceIndex
+from btmc.utils import torrent_name
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,9 @@ class TorrentState:
     the blocks that arrive until their piece is complete, checks the piece against its hash,
     and writes the good ones to its :class:`.PieceStore`. When a piece fails,
     its :class:`.SmartBan` works out who sent bad data, and they're banned.
+
+    If there's no resume file saying which pieces we have, whatever is already on disk,
+    like files from another client, is checked before anything is fetched.
 
     Args:
         torrent: the torrent
@@ -63,9 +67,13 @@ class TorrentState:
         self._have_lock = anyio.Lock()
         """Held while saving that we have a piece, see :meth:`._check`"""
 
-        self.picker = PiecePicker(
-            self.layout, shared.config.max_pieces_checking, self.store.load_have()
-        )
+        have = self.store.load_have()
+        self._disk_check = anyio.CancelScope() if have is None else None
+        """
+        The check of what's on disk, when there's no resume file,
+        so :meth:`.stop` can cut it short
+        """
+        self.picker = PiecePicker(self.layout, shared.config.max_pieces_checking, have)
         self.picker.add_callback(PieceState.CHECKING, self._queue_check)
         self.swarm = Swarm(torrent, self.picker, shared, trackers=trackers, known_peers=known_peers)
         self.swarm.add_callback("block", self._block_arrived)
@@ -103,11 +111,24 @@ class TorrentState:
         await self.fetch(piece.piece_idx for piece in pieces)
         return await anyio.to_thread.run_sync(self.store.read, file.download_path, start, end)
 
+    async def fetch_file(self, path: str) -> Path:
+        """
+        Fetch every piece of a file in the torrent, and return where it is on disk.
+        Empty files have no pieces, so they're never written, and might not be there.
+        """
+        file = self.layout.file(path)
+        pieces = self.layout.byte_range_pieces(path, 0, file.length)
+        await self.fetch(piece.piece_idx for piece in pieces)
+        return self.store.path(file.download_path)
+
     # ---- running ----
 
     async def run(self) -> None:
-        """Fetch what's wanted, until stopped"""
+        """Check what's on disk if there's no resume file, then fetch what's wanted until stopped"""
         try:
+            if self._disk_check is not None:
+                with self._disk_check:
+                    await self._check_disk()
             async with anyio.create_task_group() as tg:
                 tg.start_soon(self._check_loop)
                 await self.swarm.run()
@@ -118,6 +139,8 @@ class TorrentState:
     async def stop(self) -> None:
         """Stop fetching, and fail anything still waiting"""
         self.picker.close()
+        if self._disk_check is not None:
+            self._disk_check.cancel()
         await self.swarm.stop()
 
     def accept_connection(
@@ -127,6 +150,29 @@ class TorrentState:
         return self.swarm.accept_connection(connection, addr, handshake)
 
     # ---- checking pieces ----
+
+    async def _check_disk(self) -> None:
+        """
+        Check whatever data is on disk already, and start the resume file
+        with the pieces that pass. Only written once every piece has been looked at,
+        so a check that's cut short starts again next time.
+        """
+        paths = [f.download_path for f in self.torrent.files]
+        if await anyio.to_thread.run_sync(self.store.any_exist, paths):
+            log.info("no resume file for %s, checking the data already on disk", self.name)
+            for index in range(self.n_pieces):
+                if await anyio.to_thread.run_sync(
+                    self._on_disk, index, limiter=self.shared.hashing
+                ):
+                    self.picker.found([index])
+            log.info("found %d of %d pieces on disk", self.picker.have.count(), self.n_pieces)
+        await anyio.to_thread.run_sync(self.store.create_resume, self.have)
+
+    def _on_disk(self, index: PieceIndex) -> bool:
+        """Whether a piece is on disk and passes its check. Blocks."""
+        piece_range = self.layout.piece_range(index)
+        blocks = self.store.read_piece(piece_range)
+        return blocks is not None and piece_range.validate_data(blocks)
 
     def _block_arrived(self, block: Block, data: bytes, sender: Addr) -> None:
         if self.picker.received(block):
@@ -227,9 +273,3 @@ class SmartBan:
                     blamed.add(sender)
                 sent[sender] = digest
         return blamed
-
-
-
-def torrent_name(torrent: Torrent[Any]) -> str:
-    """The v2 info hash if there is one, else the v1 info hash, in hex, like sciop names torrents"""
-    return cast(str, torrent.v2_infohash or torrent.v1_infohash)

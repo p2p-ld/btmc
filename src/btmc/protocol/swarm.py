@@ -3,13 +3,12 @@ import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, overload
 
 import anyio
 from anyio.abc import TaskGroup
 from anyio.streams.buffered import BufferedByteStream
 from torrent_models import Torrent
-from torrent_models.types import TorrentVersion
 
 from btmc.exceptions import TrackerError, TrackerRefused
 from btmc.protocol.messages import (
@@ -24,23 +23,32 @@ from btmc.protocol.messages import (
     Request,
     Unchoke,
 )
-from btmc.protocol.peer import CloseReason, Peer
+from btmc.protocol.peer import CloseReason, ConnectionCallback, Peer
 from btmc.protocol.picker import PiecePicker, PieceState
 from btmc.protocol.shared import Shared
 from btmc.protocol.tracker import announce
 from btmc.types import Addr, Block, PieceIndex
+from btmc.utils import info_hashes
 
 log = logging.getLogger(__name__)
 
-type SwarmEvent = Literal["block"]
+type SwarmEvent = Literal["block", "connected", "disconnected"]
 """
 What callbacks can be added for, see :meth:`.Swarm.add_callback`
 
 - ``"block"``: a block we asked for arrived. Called with the block, its data,
   and the address of the peer that sent it.
+- ``"connected"``, ``"disconnected"``: a peer's connection was made or ended,
+  see :data:`.PeerEvent`. Called with the peer.
 """
 
 type BlockCallback = Callable[[Block, bytes, Addr], None]
+
+
+class _Callbacks(TypedDict):
+    block: list[BlockCallback]
+    connected: list[ConnectionCallback]
+    disconnected: list[ConnectionCallback]
 
 
 @dataclass
@@ -116,7 +124,7 @@ class Swarm:
         self.connections_made = 0
         self.bytes_from: Counter[Addr] = Counter()
 
-        self._callbacks: dict[SwarmEvent, list[BlockCallback]] = {"block": []}
+        self._callbacks: _Callbacks = {"block": [], "connected": [], "disconnected": []}
         self._candidates: dict[Addr, _Candidate] = {}
         self._tg: TaskGroup | None = None
         self._stopping = False
@@ -126,9 +134,36 @@ class Swarm:
             for info_hash in self.info_hashes:
                 self.add_candidate(addr, info_hash)
 
-    def add_callback(self, event: SwarmEvent, callback: BlockCallback) -> None:
+    @overload
+    def add_callback(self, event: Literal["block"], callback: BlockCallback) -> None: ...
+
+    @overload
+    def add_callback(
+        self, event: Literal["connected", "disconnected"], callback: ConnectionCallback
+    ) -> None: ...
+
+    def add_callback(self, event: SwarmEvent, callback: BlockCallback | ConnectionCallback) -> None:
         """Call ``callback`` whenever ``event`` happens"""
-        self._callbacks[event].append(callback)
+        if event not in self._callbacks:
+            raise ValueError(f"no such event: {event}")
+        # the overloads make sure the callback is the right kind for the event
+        self._callbacks[event].append(callback)  # type: ignore[arg-type]
+
+    @overload
+    def remove_callback(self, event: Literal["block"], callback: BlockCallback) -> None: ...
+
+    @overload
+    def remove_callback(
+        self, event: Literal["connected", "disconnected"], callback: ConnectionCallback
+    ) -> None: ...
+
+    def remove_callback(
+        self, event: SwarmEvent, callback: BlockCallback | ConnectionCallback
+    ) -> None:
+        """Stop calling a callback, like when whatever added it goes away before the torrent"""
+        if event not in self._callbacks:
+            raise ValueError(f"no such event: {event}")
+        self._callbacks[event].remove(callback)  # type: ignore[arg-type]
 
     async def run(self) -> None:
         """Run until stopped, then tell the trackers we stopped"""
@@ -248,6 +283,8 @@ class Swarm:
         assert self._tg is not None
         peer.add_callback("message", self._handle_message)
         peer.add_callback("released", self._released)
+        peer.add_callback("connected", self._peer_connected)
+        peer.add_callback("disconnected", self._peer_disconnected)
         self.peers[peer.addr] = peer
         self.connections_made += 1
         self._tg.start_soon(self._run_peer, peer)
@@ -296,6 +333,14 @@ class Swarm:
         self.picker.release_blocks(blocks)
         for other in self.peers.values():
             self._fill(other)
+
+    def _peer_connected(self, peer: Peer) -> None:
+        for callback in self._callbacks["connected"]:
+            callback(peer)
+
+    def _peer_disconnected(self, peer: Peer) -> None:
+        for callback in self._callbacks["disconnected"]:
+            callback(peer)
 
     def _handle_message(self, peer: Peer, msg: PeerMessage) -> None:
         """Handle a message from a peer. A piece this completes goes on the queue to be checked."""
@@ -402,28 +447,3 @@ class Swarm:
             event=event,
             numwant=self.config.numwant,
         )
-
-
-def wire_hash(info_hash: str | bytes) -> bytes:
-    """
-    Any info hash, as bytes or hex, v1 or v2, whole or truncated,
-    as the 20 bytes used on the wire
-    """
-    if isinstance(info_hash, str):
-        info_hash = bytes.fromhex(info_hash)
-    return info_hash[:20]
-
-
-def info_hashes(torrent: Torrent[Any]) -> list[bytes]:
-    """
-    The info hashes of the torrent's swarms, as used in handshakes and announces,
-    see :func:`.wire_hash`.
-
-    v2 first, so peers that turn up in both of a hybrid's swarms get the v2 hash.
-    """
-    hashes = []
-    if torrent.torrent_version != TorrentVersion.v1:
-        hashes.append(wire_hash(cast(str, torrent.v2_infohash)))
-    if torrent.torrent_version != TorrentVersion.v2:
-        hashes.append(wire_hash(cast(str, torrent.v1_infohash)))
-    return hashes

@@ -114,6 +114,10 @@ class PiecePicker:
         """
         self._callbacks[state].append(callback)
 
+    def remove_callback(self, state: PieceState, callback: PieceCallback) -> None:
+        """Stop calling a callback, like when whatever added it goes away before the torrent"""
+        self._callbacks[state].remove(callback)
+
     def _entered(self, state: PieceState, pieces: list[PieceIndex]) -> None:
         for callback in self._callbacks[state]:
             callback(pieces)
@@ -186,6 +190,26 @@ class PiecePicker:
         if (event := self._done.pop(index, None)) is not None:
             event.set()
         self._entered(PieceState.HAVE, [index])
+
+    def found(self, pieces: list[PieceIndex]) -> None:
+        """
+        Pieces that passed their check without being fetched, because their data was
+        already on disk. Wanted ones can't have been started yet.
+        """
+        new = [index for index in pieces if index not in self.have]
+        had_wanted = bool(self._wanted)
+        for index in new:
+            piece = self._wanted.pop(index, None)
+            if piece is not None and piece.state is not PieceState.OPEN:
+                raise ValueError(f"piece {index} was started, so it can't be found on disk")
+            self.have.add(index)
+            if (event := self._done.pop(index, None)) is not None:
+                event.set()
+        # only replaced once it's been set, or whoever's waiting for it would miss the next want
+        if had_wanted and not self._wanted:
+            self._has_wanted = anyio.Event()
+        if new:
+            self._entered(PieceState.HAVE, new)
 
     def failed(self, index: PieceIndex) -> None:
         """A piece failed its hash check, so fetch it again"""
