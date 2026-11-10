@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import anyio
+from anyio.streams.buffered import BufferedByteStream
 from torrent_models import Torrent
 
+from btmc.protocol.messages import Bitfield, Handshake
 from btmc.protocol.picker import PiecePicker, PieceState
 from btmc.protocol.shared import Shared
 from btmc.protocol.swarm import Swarm
@@ -81,12 +83,25 @@ class TorrentState:
         """
         self.picker.want(pieces)
 
+    @property
+    def have(self) -> Bitfield:
+        """A copy of the pieces that are checked and written"""
+        return Bitfield(self.n_pieces, bytes(self.picker.have.bits))
+
     async def fetch(self, pieces: Iterable[PieceIndex]) -> None:
         """
         Fetch pieces, returning once all of them are checked and written.
         A caller that stops waiting doesn't stop them being fetched.
         """
         await self.picker.wait(pieces)
+
+    async def read(self, path: str, start: int, end: int) -> bytes:
+        """Bytes [start, end) of a file in the torrent, fetching whatever pieces hold them"""
+        file = self.layout.file(path)
+        end = min(end, file.length)
+        pieces = self.layout.byte_range_pieces(path, start, end)
+        await self.fetch(piece.piece_idx for piece in pieces)
+        return await anyio.to_thread.run_sync(self.store.read, file.download_path, start, end)
 
     # ---- running ----
 
@@ -104,6 +119,12 @@ class TorrentState:
         """Stop fetching, and fail anything still waiting"""
         self.picker.close()
         await self.swarm.stop()
+
+    def accept_connection(
+        self, connection: BufferedByteStream, addr: Addr, handshake: Handshake
+    ) -> bool:
+        """See :meth:`.Swarm.accept_connection`"""
+        return self.swarm.accept_connection(connection, addr, handshake)
 
     # ---- checking pieces ----
 
