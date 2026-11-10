@@ -19,8 +19,6 @@ from btmc.protocol.messages import (
     BitfieldMessage,
     Handshake,
     Have,
-    Interested,
-    NotInterested,
     PeerMessage,
     Piece,
     Request,
@@ -269,18 +267,23 @@ class Swarm:
     def _opened(self, pieces: list[PieceIndex]) -> None:
         """
         Pieces are open to fetch, because they were just wanted or failed their check:
-        tell the peers that have any of them we're interested, ask them for blocks, and connect
+        tell the peers that have any of them we're interested, ask peers for blocks, and connect.
+        A failed piece makes room for another to start, so every peer is asked.
         """
         opened = Bitfield(self.n_pieces)
         for index in pieces:
             opened.add(index)
         for peer in self.peers.values():
             if opened.intersects(peer.has):
-                self._update_interest(peer)
-                self._fill(peer)
+                peer.set_interested(True)
+        for peer in self.peers.values():
+            self._fill(peer)
         self._connect(anyio.current_time())
 
     def _had(self, pieces: list[PieceIndex]) -> None:
+        """Pieces passed, making room for others to start, so ask every peer for blocks"""
+        for peer in self.peers.values():
+            self._fill(peer)
         self._give_up_connections()
 
     def _banned(self, addr: Addr) -> None:
@@ -300,21 +303,19 @@ class Swarm:
             case Unchoke():
                 self._fill(peer)
             case Have(index=index):
-                if not peer.interested and self.picker.is_wanted(index):
-                    peer.send(Interested())
+                if self.picker.is_wanted(index):
+                    peer.set_interested(True)
                 self._fill(peer)
             case BitfieldMessage():
-                self._update_interest(peer)
+                # bit of a code smell here - the peer already got the message,
+                # it just can't check for interest because it doesn't hold the piece picker
+                # if this keeps getting tangled the peers might need the piece picker.
+                peer.set_interested(self.picker.peer_has_wanted_pieces(peer.has))
             case Piece(index=index, begin=begin, block=data):
                 self.bytes_from[peer.addr] += len(data)
                 for callback in self._callbacks["block"]:
                     callback(Block(index, begin, len(data)), data, peer.addr)
                 self._fill(peer)
-
-    def _update_interest(self, peer: Peer) -> None:
-        interested = self.picker.peer_has_wanted_pieces(peer.has)
-        if interested != peer.interested:
-            peer.send(Interested() if interested else NotInterested())
 
     def _fill(self, peer: Peer) -> None:
         """Request blocks until the peer's pipeline is full or it has nothing we want"""
@@ -324,7 +325,7 @@ class Swarm:
             block = self.picker.pick(peer.has)
             if block is None:
                 if not peer.requests:
-                    self._update_interest(peer)
+                    peer.set_interested(self.picker.peer_has_wanted_pieces(peer.has))
                 return
             peer.send(Request(*block))
 
@@ -380,7 +381,8 @@ class Swarm:
     async def _announce_stopped(self, url: str, info_hash: bytes) -> None:
         request = self._announce_request(info_hash, AnnounceEvent.STOPPED)
         with contextlib.suppress(TrackerError):
-            await announce(url, request, http=self.shared.http, config=self.config)
+            async with self.shared.announces:
+                await announce(url, request, http=self.shared.http, config=self.config)
         self.announced.discard((url, info_hash))
 
     async def _announce_all_stopped(self) -> None:

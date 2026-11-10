@@ -329,6 +329,11 @@ class Peer:
         if not self.closed:
             self._outgoing.send_nowait(msg.encode())
 
+    def set_interested(self, interested: bool) -> None:
+        """Tell the peer whether we're interested, if that's changed"""
+        if interested != self.interested:
+            self.send(Interested() if interested else NotInterested())
+
     def close(self, reason: CloseReason, error: Exception | None = None) -> None:
         """
         End the connection, and stop :meth:`.run` wherever it's got to:

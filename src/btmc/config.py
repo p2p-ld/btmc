@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,13 @@ class Config:
     """Requests in flight per peer, in 16 KiB blocks"""
     announce_concurrency: int = 16
     """Announces in progress at once, across all torrents"""
+    hash_threads: int = dataclasses.field(default_factory=lambda: os.cpu_count() or 1)
+    """Pieces being hash checked at once, across all torrents. Defaults to the number of CPUs."""
+    max_pieces_checking: int = 16
+    """
+    Pieces per torrent that are complete and waiting for their hash check, held in memory.
+    While this many are, no new piece is started, until the checks catch up.
+    """
 
     # ---- peers ----
 
@@ -57,17 +65,29 @@ class Config:
     # ---- trackers ----
 
     announce_timeout: float = 15
+    """
+    How long one announce can take, from looking up the tracker to its answer.
+    Each request is sent once: a tracker that doesn't answer in time is backed off.
+    """
     announce_retry: float = 300
-    """How long to wait before announcing again after every tracker in a tier failed"""
+    """How long to wait before announcing again when a tracker refused, or didn't say"""
+    tracker_backoff: float = 15
+    """
+    How long every torrent waits before announcing to a tracker that didn't answer,
+    doubled for each failure in a row
+    """
+    max_tracker_backoff: float = 3600
     min_announce_interval: float = 60
-    max_announce_interval: float = 3600
+    """The shortest wait between announces. A tracker that asks for a longer one gets it."""
+    max_announce_interval: float = 86400
+    """
+    The longest wait between announces, so a tracker that asks for a huge one
+    doesn't stop us announcing to it
+    """
     stopped_announce_timeout: float = 5
     """How long to wait for trackers when announcing that we stopped"""
     numwant: int = 50
     """Peers to ask trackers for"""
-    udp_tries: int = 3
-    udp_timeout: float = 3
-    """How long to wait for a UDP tracker's first answer, doubled for each try"""
 
     # ---- state ----
 

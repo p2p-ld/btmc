@@ -62,6 +62,10 @@ class PiecePicker:
     first wanted, and the ones started are finished before new ones are started.
     A piece that fails its hash check keeps its place.
 
+    Complete pieces are held in memory until their hash check is done, so when the checks
+    fall behind, by ``max_checking`` pieces, no new piece is started until they catch up.
+    Callers waiting for room hear about it when a piece is had, or opened again by failing.
+
     Each block is asked of one peer at a time, and goes back up for grabs
     when it's released with :meth:`.release_blocks`, like when that peer chokes us
     or goes away.
@@ -72,12 +76,14 @@ class PiecePicker:
 
     Args:
         layout: the torrent's pieces and files
+        max_checking: the most pieces waiting for their hash check before no more are started
         have: the pieces we have already
     """
 
-    def __init__(self, layout: FileLayout[Any], have: Bitfield | None = None):
+    def __init__(self, layout: FileLayout[Any], max_checking: int, have: Bitfield | None = None):
         self.n_pieces = layout.n_pieces
         self._layout = layout
+        self._max_checking = max_checking
         self.have = Bitfield(self.n_pieces) if have is None else have
         """Pieces that passed their hash check and were written. Only the picker changes it."""
         self._wanted: dict[PieceIndex, _WantedPiece] = {}
@@ -195,14 +201,30 @@ class PiecePicker:
     # ---- blocks ----
 
     def pick(self, has: Bitfield) -> Block | None:
-        """The next block to ask a peer for, if it has any we want"""
+        """
+        The next block to ask a peer for, if it has any we want
+
+        Limit yielding pieces according to the _max_checking value -
+        applies backpressure to fetching by not requesting more blocks
+        while our hashing queue is full.
+        """
+        first_open: tuple[PieceIndex, _WantedPiece] | None = None
+        checking = 0
         for index, piece in self._wanted.items():
-            if index in has and piece.state is PieceState.DOWNLOADING and piece.unrequested:
-                return self._take(index, piece)
-        for index, piece in self._wanted.items():
-            if index in has and piece.state is PieceState.OPEN and self._start(index, piece):
-                return self._take(index, piece)
-        return None
+            match piece.state:
+                case PieceState.CHECKING:
+                    checking += 1
+                case PieceState.DOWNLOADING if index in has and piece.unrequested:
+                    return self._take(index, piece)
+                case PieceState.OPEN if first_open is None and index in has:
+                    first_open = (index, piece)
+        if first_open is None or checking >= self._max_checking:
+            return None
+        index, piece = first_open
+        if not self._start(index, piece):
+            # it was all padding, so it's checking already, and peers are asked again once it's had
+            return None
+        return self._take(index, piece)
 
     def _start(self, index: PieceIndex, piece: _WantedPiece) -> bool:
         """
