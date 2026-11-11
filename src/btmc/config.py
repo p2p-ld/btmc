@@ -3,7 +3,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 CONFIG_FILE = "btmc.toml"
 """Where :meth:`.Config.from_toml` looks by default, in the current directory"""
@@ -100,21 +100,22 @@ class Config:
             self.state_file = Path(self.state_file)
 
     @classmethod
-    def from_toml(cls, path: Path | str | None = None) -> Self:
+    def from_toml(cls, path: Path | str | None = None, **settings: Any) -> Self:
         """
         Load settings from a TOML file, with defaults for anything it leaves out.
 
         Args:
             path: the file. By default, ``btmc.toml`` in the current directory if there is one,
                 and all defaults if there isn't.
+            settings: settings to use instead of the file's
         """
         if path is None:
             path = Path(CONFIG_FILE)
             if not path.exists():
-                return cls()
+                return cls(**settings)
         with open(path, "rb") as f:
             values = tomllib.load(f)
         unknown = values.keys() - {f.name for f in dataclasses.fields(cls)}
         if unknown:
             raise ValueError(f"unknown settings in {path}: {', '.join(sorted(unknown))}")
-        return cls(**values)
+        return cls(**{**values, **settings})
