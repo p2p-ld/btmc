@@ -1,0 +1,38 @@
+article table.bep-table {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto minmax(0, 2fr);
+}
+
+table.bep-table thead,
+table.bep-table tbody,
+table.bep-table tr {
+  display: contents;
+}
+
+table.bep-table th:nth-child(4),
+table.bep-table td:nth-child(4) {
+  text-align: center;
+}
+
+/* On narrow screens the notes go on a second row beneath the rest. */
+@media (max-width: 46em) {
+  article table.bep-table {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+
+  table.bep-table th:nth-child(-n + 4),
+  table.bep-table td:nth-child(-n + 4) {
+    border-bottom: none;
+  }
+
+  table.bep-table th:nth-child(4),
+  table.bep-table td:nth-child(4) {
+    border-right: none;
+  }
+
+  table.bep-table th:nth-child(5),
+  table.bep-table td:nth-child(5) {
+    grid-column: 1 / -1;
+    border-left: none;
+  }
+}

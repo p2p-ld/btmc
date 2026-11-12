@@ -7,6 +7,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## General
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [3](https://www.bittorrent.org/beps/bep_0003.html) | The BitTorrent Protocol Specification | Final | ☑️ | Reads .torrent files, talks to HTTP trackers and to peers, and checks every piece. It never uploads, so it never unchokes peers or tells them which pieces it has. It doesn't send `completed`: it fetches parts of torrents, so it says `stopped` when nothing more is wanted and `started` when something is again. |
@@ -16,6 +17,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## DHT
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [5](https://www.bittorrent.org/beps/bep_0005.html) | DHT Protocol | Accepted | ❌ | Peers come only from trackers, incoming connections, and peers you give it. |
@@ -32,6 +34,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Trackers
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [7](https://www.bittorrent.org/beps/bep_0007.html) | IPv6 Tracker Extension | Draft | 🟡 | Reads IPv6 peers from HTTP (`peers6`) and UDP trackers. Announces once per tracker, over whichever address family connects, rather than once per local IPv4 and IPv6 address, and doesn't send a `key`. |
@@ -48,6 +51,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Peer extensions
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [6](https://www.bittorrent.org/beps/bep_0006.html) | Fast Extension | Accepted | ❌ | Not offered. If a peer sends its messages anyway, they're ignored rather than closing the connection. |
@@ -62,6 +66,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Torrent file extensions and magnet links
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [27](https://www.bittorrent.org/beps/bep_0027.html) | Private Torrents | Accepted | ❌ | Private torrents aren't supported yet. The private flag isn't read, and btmc announces to all of a torrent's trackers at once, where a private torrent should use one at a time. |
@@ -75,6 +80,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Local peer discovery
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [14](https://www.bittorrent.org/beps/bep_0014.html) | Local Service Discovery | Accepted | ❌ | |
@@ -83,6 +89,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Web seeds
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [17](https://www.bittorrent.org/beps/bep_0017.html) | HTTP Seeding | Draft | ❌ | |
@@ -90,6 +97,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Transport
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [29](https://www.bittorrent.org/beps/bep_0029.html) | uTorrent transport protocol | Accepted | ❌ | TCP only. |
@@ -97,6 +105,7 @@ btmc supports. btmc only downloads (for now), so ✅ means everything a download
 
 ## Other
 
+{.bep-table}
 | BEP | Title | BEP status | Support | Notes |
 |----:|-------|------------|---------|-------|
 | [18](https://www.bittorrent.org/beps/bep_0018.html) | Search Engine Specification | Deferred | ❌ | |

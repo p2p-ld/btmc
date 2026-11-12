@@ -42,6 +42,8 @@ intersphinx_mapping = {
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "furo"
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 
 autodoc_member_order = "bysource"
 add_module_names = False
@@ -68,3 +70,4 @@ todo_link_only = True
 
 # myst
 myst_heading_anchors = 3
+myst_enable_extensions = ["attrs_block"]
