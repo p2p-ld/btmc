@@ -500,7 +500,7 @@ _UDP_RESPONSES: dict[int, type[UDPResponse]] = {
 def decode_http(data: bytes) -> HTTPResponse:
     """A response from an HTTP tracker"""
     try:
-        value = bencode_rs.bdecode(data)
+        value = bencode_rs.bdecode_relax(data)
     except bencode_rs.BencodeDecodeError as e:
         raise TrackerError(f"can't decode tracker response: {e}") from e
     if not isinstance(value, dict):

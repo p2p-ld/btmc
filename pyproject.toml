@@ -7,7 +7,7 @@ authors = [
 ]
 dependencies = [
     "torrent-models>=0.4.0",
-    "bencode-rs>=0.0.7",
+    "bencode-rs>=0.1.0",
     "httpx>=0.28.1",
     "anyio>=4.5",
     "platformdirs>=4.3",
@@ -55,7 +55,6 @@ tests = [
     # no wheels for 3.14 yet
     "libtorrent>=2.0.11; python_version<'3.14'",
     "pytest>=8.3.5",
-    "pytest-asyncio>=0.25.3",
     "pytest-cov>=6.0.0",
 ]
 dev = [
@@ -207,10 +206,6 @@ addopts = [
 ]
 
 testpaths = ["tests"]
-asyncio_mode = "auto"
-# one loop for the whole session, so the tracker and seeders can be shared between tests
-asyncio_default_fixture_loop_scope = "session"
-asyncio_default_test_loop_scope = "session"
 markers = [
   "libtorrent: tests that use libtorrent peers",
 ]
