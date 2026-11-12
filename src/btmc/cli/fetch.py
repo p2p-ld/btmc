@@ -39,7 +39,7 @@ def fetch(
         with TorrentProgress(console) as progress:
             async with running_client(torrent, dest, peer, listen, no_trackers) as (client, t):
                 progress.attach(client)
-                await client.fetch(t, pieces or range(n_pieces))
+                await client.fetch(t, pieces or None)
                 # stopping removes the torrent, which would take its bar away
                 progress.detach()
         console.print(f"downloaded {t.downloaded:,} bytes, {t.hash_failures} hash failures")

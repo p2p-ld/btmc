@@ -1,4 +1,5 @@
 """One torrent: asking for pieces, and checking and storing pieces as they arrive"""
+
 from __future__ import annotations
 
 import hashlib
@@ -84,24 +85,24 @@ class TorrentState:
 
     # ---- fetching ----
 
-    def want(self, pieces: Iterable[PieceIndex]) -> None:
+    def want(self, pieces: Iterable[PieceIndex] | None = None) -> None:
         """
-        Fetch pieces, in the order given, after the ones wanted already.
+        Fetch pieces, in the order given, after the ones wanted already, or all of them by default.
         Raises IndexError for any not in the torrent.
         """
-        self.picker.want(pieces)
+        self.picker.want(pieces if pieces is not None else range(self.n_pieces))
 
     @property
     def have(self) -> Bitfield:
         """A copy of the pieces that are checked and written"""
         return Bitfield(self.n_pieces, bytes(self.picker.have.bits))
 
-    async def fetch(self, pieces: Iterable[PieceIndex]) -> None:
+    async def fetch(self, pieces: Iterable[PieceIndex] | None = None) -> None:
         """
-        Fetch pieces, returning once all of them are checked and written.
+        Fetch pieces, or all of them by default, returning once they're all checked and written.
         A caller that stops waiting doesn't stop them being fetched.
         """
-        await self.picker.wait(pieces)
+        await self.picker.wait(pieces if pieces is not None else range(self.n_pieces))
 
     async def read(self, path: str, start: int, end: int) -> bytes:
         """Bytes [start, end) of a file in the torrent, fetching whatever pieces hold them"""
@@ -196,9 +197,6 @@ class TorrentState:
         """Check a complete piece against its hash, write it if it's good, and record which"""
         piece_range = self.layout.piece_range(piece.index)
         blocks = piece.data()
-        # the picker doesn't ask for the padfiles at the end
-        if piece_range.padding:
-            blocks.append(bytes(piece_range.padding))
         ok = await anyio.to_thread.run_sync(
             piece_range.validate_data, blocks, limiter=self.shared.hashing
         )
@@ -224,6 +222,7 @@ class TorrentState:
             self.hash_failures += 1
             log.warning("piece %d failed its hash check, from %s", piece.index, piece.senders)
             self.picker.failed(piece.index)
+
 
 @dataclass
 class ReceivedPiece:

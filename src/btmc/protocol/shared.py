@@ -83,7 +83,7 @@ class Shared:
 
     def ban(self, addr: Addr) -> None:
         """Stop every torrent from connecting to a peer that sent bad data"""
-        log.warning("banning %s:%s for sending bad data", *addr)
+        log.warning("banning %s for sending bad data", addr)
         self._banned.add(addr)
         for callback in self._callbacks["ban"]:
             callback(addr)

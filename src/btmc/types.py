@@ -26,6 +26,10 @@ class Addr(NamedTuple):
     host: str
     port: int
 
+    def __str__(self) -> str:
+        """``host:port``, or ``[host]:port`` for IPv6, as :func:`.parse_addr` reads it"""
+        return f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
+
 
 def parse_addr(value: str | Sequence[Any]) -> Addr:
     """An address from ``"host:port"`` (``"[::1]:port"`` for IPv6) or a ``(host, port)`` pair"""

@@ -216,7 +216,7 @@ class Client:
 
     # ---- fetching ----
 
-    def want(self, t: TorrentState, pieces: Iterable[PieceIndex]) -> None:
+    def want(self, t: TorrentState, pieces: Iterable[PieceIndex] | None = None) -> None:
         """See :meth:`.TorrentState.want`"""
         t.want(pieces)
 
@@ -224,7 +224,7 @@ class Client:
         """See :attr:`.TorrentState.have`"""
         return t.have
 
-    async def fetch(self, t: TorrentState, pieces: Iterable[PieceIndex]) -> None:
+    async def fetch(self, t: TorrentState, pieces: Iterable[PieceIndex] | None = None) -> None:
         """See :meth:`.TorrentState.fetch`"""
         await t.fetch(pieces)
 
