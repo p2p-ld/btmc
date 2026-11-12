@@ -135,6 +135,8 @@ class TorrentState:
                 tg.cancel_scope.cancel()
         finally:
             self.picker.close()
+            self._to_check.close()
+            self._checks.close()
 
     async def stop(self) -> None:
         """Stop fetching, and fail anything still waiting"""

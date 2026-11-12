@@ -28,11 +28,11 @@ from btmc.utils import torrent_name
     help="A file in the torrent to show as a zip, like a .wacz. Can be used multiple times.",
 )
 @click.option(
-    "--cache-dir",
+    "--download-dir",
     type=click.Path(file_okay=False, path_type=Path),
     help=(
         "Where to keep fetched pieces, in a directory for each torrent. "
-        "Defaults to cache_dir in btmc.toml, or the user cache directory."
+        "Defaults to download_dir in btmc.toml, or the user cache directory."
     ),
 )
 @click.option(
@@ -55,7 +55,7 @@ def mount(
     torrent: Torrent[Any],
     mountpoint: Path,
     zips: tuple[str, ...],
-    cache_dir: Path | None,
+    download_dir: Path | None,
     fetch: str,
     clear_cache: bool,
     peer: list[Addr],
@@ -89,9 +89,9 @@ def mount(
         )
 
     config = client_config(listen)
-    if cache_dir is not None:
-        config = dataclasses.replace(config, cache_dir=cache_dir.expanduser())
-    dest = config.cache_dir / torrent_name(torrent)
+    if download_dir is not None:
+        config = dataclasses.replace(config, download_dir=download_dir.expanduser())
+    dest = config.download_dir / torrent_name(torrent)
     if clear_cache and dest.exists():
         shutil.rmtree(dest)
         console.print(f"cleared {dest}", markup=False)

@@ -1,7 +1,7 @@
 [project]
 name = "btmc"
 dynamic=["version"]
-description = "btmc - bittorrent microclient: a small asyncio bittorrent client for fetching specific pieces of torrents"
+description = "btmc - bittorrent microclient: a super small asyncio bittorrent client"
 authors = [
     {name = "sneakers-the-rat", email = "sneakers-the-rat@protonmail.com"},
 ]
@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed"
 ]
+
 [project.urls]
 repository = "https://github.com/p2p-ld/btmc"
 
@@ -44,6 +45,8 @@ mount = [
     "btmc[fsspec]",
     "mfusepy>=3.1.1",
 ]
+
+[dependency-groups]
 mypy = [
     "btmc[cli,mount]",
 ]
@@ -210,4 +213,10 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 markers = [
   "libtorrent: tests that use libtorrent peers",
+]
+# leaked resources fail tests. When an unclosed object is garbage collected,
+# its ResourceWarning reaches pytest as an unraisable exception
+filterwarnings = [
+  "error::ResourceWarning",
+  "error::pytest.PytestUnraisableExceptionWarning",
 ]

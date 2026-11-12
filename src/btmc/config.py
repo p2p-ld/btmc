@@ -93,12 +93,12 @@ class Config:
 
     # ---- state ----
 
-    cache_dir: Path = dataclasses.field(
+    download_dir: Path = dataclasses.field(
         default_factory=lambda: platformdirs.user_cache_path("btmc")
     )
     """
-    Where to keep fetched pieces when nothing says where to download to,
-    in a directory for each torrent named by its info hash.
+    Where torrents go, each in a directory named by its info hash,
+    unless :meth:`.Client.add` is given a directory for one.
     Defaults to the user cache directory, like ``~/Library/Caches/btmc`` on macOS
     and ``~/.cache/btmc`` on Linux.
     """
@@ -107,8 +107,8 @@ class Config:
 
     def __post_init__(self) -> None:
         # paths come from TOML as strings
-        if isinstance(self.cache_dir, str):
-            self.cache_dir = Path(self.cache_dir).expanduser()
+        if isinstance(self.download_dir, str):
+            self.download_dir = Path(self.download_dir).expanduser()
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
 

@@ -95,11 +95,11 @@ class TorrentFileSystem(AsyncFileSystem):
     """
     The files in torrents, fetched a piece at a time as they're read.
 
-    Pieces are kept in the config's :attr:`.Config.cache_dir`,
+    Pieces are kept in the config's :attr:`.Config.download_dir`,
     so anything read once is read from disk after that.
 
     Args:
-        cache_dir: where to keep fetched pieces, instead of the config's ``cache_dir``.
+        download_dir: where to keep fetched pieces, instead of the config's ``download_dir``.
             Each torrent gets a directory named by its info hash.
         torrent_dirs: directories to look in for .torrent files,
             to find torrents by info hash. See :class:`.TorrentRegistry`
@@ -122,7 +122,7 @@ class TorrentFileSystem(AsyncFileSystem):
 
     def __init__(
         self,
-        cache_dir: Path | str | None = None,
+        download_dir: Path | str | None = None,
         torrent_dirs: Sequence[Path | str] = (),
         torrents: Sequence[Torrent[Any] | Path | str] = (),
         zips: Sequence[str] = (),
@@ -140,8 +140,8 @@ class TorrentFileSystem(AsyncFileSystem):
             config = Config.from_toml()
         elif isinstance(config, dict):
             config = Config(**config)
-        if cache_dir is not None:
-            config = dataclasses.replace(config, cache_dir=Path(cache_dir).expanduser())
+        if download_dir is not None:
+            config = dataclasses.replace(config, download_dir=Path(download_dir).expanduser())
         self.config = config
         self._client: Client | None = None
         self._client_lock = asyncio.Lock()
@@ -347,7 +347,7 @@ class TorrentFileSystem(AsyncFileSystem):
         # the client has to be opened and closed in the same task,
         # and fsspec runs each call in a task of its own
         try:
-            async with Client(self.config.cache_dir, config=self.config) as client:
+            async with Client(config=self.config) as client:
                 self._client = client
                 ready.set()
                 await stop.wait()

@@ -51,13 +51,11 @@ class Client:
     so different jobs can share a client without coordinating.
 
     Args:
-        download_dir: where torrents go, each in a directory named by its info hash,
-            unless :meth:`.add` is given a directory for it
-        config: settings, see :meth:`.Config.from_toml`
+        config: settings, including where torrents go, :attr:`.Config.download_dir`.
+            See :meth:`.Config.from_toml`
     """
 
-    def __init__(self, download_dir: Path | None = None, *, config: Config | None = None):
-        self.download_dir = download_dir
+    def __init__(self, *, config: Config | None = None):
         self.config = config or Config()
         self.peer_id = PEER_ID_PREFIX + os.urandom(20 - len(PEER_ID_PREFIX))
         self._torrents: set[TorrentState] = set()
@@ -168,7 +166,7 @@ class Client:
         Args:
             torrent: the torrent
             root: download directory, defaults to a directory named by its info hash
-                in the client's download directory
+                in the config's :attr:`.Config.download_dir`
             trackers: tracker tiers to use instead of the torrent's own
             known_peers: peers to connect to without asking a tracker
         """
@@ -178,9 +176,7 @@ class Client:
         if existing is not None:
             return existing
         if root is None:
-            if self.download_dir is None:
-                raise ValueError("pass a root for the torrent, or give the client a download_dir")
-            root = self.download_dir / torrent_name(torrent)
+            root = self.config.download_dir / torrent_name(torrent)
         t = TorrentState(torrent, root, self._shared, trackers=trackers, known_peers=known_peers)
         self._torrents.add(t)
         for info_hash in t.info_hashes:

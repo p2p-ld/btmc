@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from torrent_models.types.v1 import V1PieceRange
-from torrent_models.types.v2 import V2PieceRange
+from torrent_models.types.v2 import BLOCK_SIZE, V2PieceRange
 
 from btmc.protocol.messages import Bitfield
 
@@ -80,11 +80,13 @@ class PieceStore:
     def read_piece(self, piece: V1PieceRange | V2PieceRange) -> list[bytes] | None:
         """
         A piece's data, from the files it covers, with zeros for padfiles,
-        or None if any of it isn't on disk
+        or None if any of it isn't on disk.
+        v2 pieces come in 16 KiB blocks, since that's how they're checked.
         """
         try:
             if isinstance(piece, V2PieceRange):
-                return [self.read(piece.full_path, piece.range_start, piece.range_end)]
+                data = self.read(piece.full_path, piece.range_start, piece.range_end)
+                return [data[i : i + BLOCK_SIZE] for i in range(0, len(data), BLOCK_SIZE)]
             return [
                 (
                     bytes(f.range_end - f.range_start)
