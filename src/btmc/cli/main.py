@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from btmc.cli.fetch import fetch
+from btmc.cli.mount import mount
 from btmc.cli.zip import zip_
 
 
@@ -37,3 +38,4 @@ def main(ctx: click.Context, verbose: int) -> None:
 
 main.add_command(fetch)
 main.add_command(zip_)
+main.add_command(mount)

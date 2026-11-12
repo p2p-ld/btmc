@@ -2,10 +2,10 @@
 # It is not intended for manual editing.
 
 [metadata]
-groups = ["default", "cli", "dev", "docs", "fsspec", "local", "mypy", "tests"]
+groups = ["default", "cli", "dev", "docs", "fsspec", "local", "mount", "mypy", "tests"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.1"
-content_hash = "sha256:4412111cb5661adea0f2e6726b8a2e9ae936fff09d8ca56487e8266bbf492667"
+content_hash = "sha256:0a93d58f2c0feef9929e7614e5c227a879003088cbb5c04dacc92c663f0d84e3"
 
 [[metadata.targets]]
 requires_python = ">=3.12"
@@ -630,7 +630,7 @@ name = "fsspec"
 version = "2026.9.0"
 requires_python = ">=3.10"
 summary = "File-system specification"
-groups = ["dev", "docs", "fsspec", "mypy", "tests"]
+groups = ["docs", "fsspec", "mount", "mypy", "tests"]
 files = [
     {file = "fsspec-2026.9.0-py3-none-any.whl", hash = "sha256:8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f"},
     {file = "fsspec-2026.9.0.tar.gz", hash = "sha256:0f08147951c8cb31d844c3547d631053b127863b60be04cf06e121333ee0e2fe"},
@@ -888,7 +888,7 @@ files = [
 
 [[package]]
 name = "markdown-it-py"
-version = "4.2.0"
+version = "4.3.0"
 requires_python = ">=3.10"
 summary = "Python port of markdown-it. Markdown parsing, done right!"
 groups = ["default", "cli", "dev", "docs", "local", "mypy", "tests"]
@@ -896,8 +896,8 @@ dependencies = [
     "mdurl~=0.1",
 ]
 files = [
-    {file = "markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"},
-    {file = "markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49"},
+    {file = "markdown_it_py-4.3.0-py3-none-any.whl", hash = "sha256:7aa1511a46c39138de78d9eba92ce47e63124d8003fc98b3a351909e04239efa"},
+    {file = "markdown_it_py-4.3.0.tar.gz", hash = "sha256:91a58fa5b72c71a40cf7177250fd767480d7a2bb3ac426ccfb76fb90305fdaaa"},
 ]
 
 [[package]]
@@ -1017,16 +1017,16 @@ files = [
 
 [[package]]
 name = "mdit-py-plugins"
-version = "0.6.1"
+version = "0.7.0"
 requires_python = ">=3.10"
 summary = "Collection of plugins for markdown-it-py"
 groups = ["docs"]
 dependencies = [
-    "markdown-it-py<5.0.0,>=2.0.0",
+    "markdown-it-py<5.0.0,>=3.0.0",
 ]
 files = [
-    {file = "mdit_py_plugins-0.6.1-py3-none-any.whl", hash = "sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d"},
-    {file = "mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0"},
+    {file = "mdit_py_plugins-0.7.0-py3-none-any.whl", hash = "sha256:7f8e30403f3dd8bfe3afcdcbc6e61066d3f2e714167507b9c26eb385ec399353"},
+    {file = "mdit_py_plugins-0.7.0.tar.gz", hash = "sha256:26d2179227aaf4d1dc7acffe7a738cbd15cade6b5a61cff0a2cbf9fed93efede"},
 ]
 
 [[package]]
@@ -1038,6 +1038,17 @@ groups = ["default", "cli", "dev", "docs", "local", "mypy", "tests"]
 files = [
     {file = "mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"},
     {file = "mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"},
+]
+
+[[package]]
+name = "mfusepy"
+version = "3.1.1"
+requires_python = ">=3.9"
+summary = "Ctypes bindings for the high-level API in libfuse 2 and 3"
+groups = ["dev", "docs", "mount", "mypy", "tests"]
+files = [
+    {file = "mfusepy-3.1.1-py3-none-any.whl", hash = "sha256:69fb70cfc7f7cce595e6ff586f8451d8298f01f18286a157f24f564b24ec5a37"},
+    {file = "mfusepy-3.1.1.tar.gz", hash = "sha256:338ece54513d7d1a5e9492837679a0c7432ecf96a03490a2683a1ce1d19570e1"},
 ]
 
 [[package]]
@@ -1111,21 +1122,21 @@ files = [
 
 [[package]]
 name = "myst-parser"
-version = "5.1.0"
+version = "5.2.0"
 requires_python = ">=3.11"
 summary = "An extended [CommonMark](https://spec.commonmark.org/) compliant parser,"
 groups = ["docs"]
 dependencies = [
-    "docutils<0.23,>=0.20",
+    "docutils<0.24,>=0.20",
     "jinja2",
     "markdown-it-py~=4.2",
-    "mdit-py-plugins>=0.6.1,~=0.6",
+    "mdit-py-plugins~=0.7",
     "pyyaml",
     "sphinx<10,>=8",
 ]
 files = [
-    {file = "myst_parser-5.1.0-py3-none-any.whl", hash = "sha256:9c91c52b3cdb4d94a6506e4fab4e2f296c7623a0da0dcbe6de1565c3dad67a8a"},
-    {file = "myst_parser-5.1.0.tar.gz", hash = "sha256:ab69322dc6719dcc7f296479dbb70181b66df6ed315064f92dbc85c0e1bf2f02"},
+    {file = "myst_parser-5.2.0-py3-none-any.whl", hash = "sha256:517c91da81e6898c6aaa223c236f384e6f5cc5d14ab7df38b11164862c1b6e1a"},
+    {file = "myst_parser-5.2.0.tar.gz", hash = "sha256:749cc02793f2be6b984b0b59b1fe33b6ed61d77644499b85db436d0d20117fa4"},
 ]
 
 [[package]]
@@ -1155,7 +1166,7 @@ name = "platformdirs"
 version = "4.14.5"
 requires_python = ">=3.11"
 summary = "A small Python package for determining appropriate platform-specific dirs, e.g. a `user data dir`."
-groups = ["dev"]
+groups = ["default", "dev"]
 files = [
     {file = "platformdirs-4.14.5-py3-none-any.whl", hash = "sha256:8e778c6fa421516f4d3369449f8df3b0e1b72c0e0005fe88e3ec772d0a14e750"},
     {file = "platformdirs-4.14.5.tar.gz", hash = "sha256:32e9921db7385aa8169bee4fe9501923e5715ba9fb7ea3b9c69b0d8e0639f7a1"},
@@ -1518,13 +1529,13 @@ files = [
 
 [[package]]
 name = "soupsieve"
-version = "4.0.1"
+version = "4.1"
 requires_python = ">=3.11.5"
 summary = "A modern CSS selector implementation for Beautiful Soup."
 groups = ["docs"]
 files = [
-    {file = "soupsieve-4.0.1-py3-none-any.whl", hash = "sha256:2e68cf7dd5a0f29d81f9d485275ccf294e6475f615e211895d91cb81f8614f04"},
-    {file = "soupsieve-4.0.1.tar.gz", hash = "sha256:7621e3c5f6b371ed2c5eabaac5de300ac3d66d05e6d7f34783e31b63c4f90c75"},
+    {file = "soupsieve-4.1-py3-none-any.whl", hash = "sha256:e4d667b3974ce6e038e7390486b8093369854a1d345ffdd4c121dfc4a782e809"},
+    {file = "soupsieve-4.1.tar.gz", hash = "sha256:ca9abf7126667010d8f6e9b39bfc1bc3b23c8aed9bcb0f54a754dde969bb8aab"},
 ]
 
 [[package]]
@@ -1608,16 +1619,16 @@ files = [
 
 [[package]]
 name = "sphinx-design"
-version = "0.7.0"
+version = "0.8.0"
 requires_python = ">=3.11"
 summary = "A sphinx extension for designing beautiful, view size responsive web components."
 groups = ["docs"]
 dependencies = [
-    "sphinx<10,>=7",
+    "sphinx<10,>=7.2",
 ]
 files = [
-    {file = "sphinx_design-0.7.0-py3-none-any.whl", hash = "sha256:f82bf179951d58f55dca78ab3706aeafa496b741a91b1911d371441127d64282"},
-    {file = "sphinx_design-0.7.0.tar.gz", hash = "sha256:d2a3f5b19c24b916adb52f97c5f00efab4009ca337812001109084a740ec9b7a"},
+    {file = "sphinx_design-0.8.0-py3-none-any.whl", hash = "sha256:861fecb064c3da5ff48031a237692ccb7c2e671f8c4aa84d4b9eef3cb8fd9c91"},
+    {file = "sphinx_design-0.8.0.tar.gz", hash = "sha256:57fa4d96378525122947ab6109c6e490190e3119dc10f3e3adf6b71444bf3bb4"},
 ]
 
 [[package]]

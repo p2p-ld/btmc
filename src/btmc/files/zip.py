@@ -1,10 +1,12 @@
 """Reading files inside a zip file inside a torrent, fetching only the pieces that hold them"""
 
 import io
+import shutil
+import struct
 import zipfile
 from collections.abc import AsyncIterator
 from itertools import islice
-from typing import IO
+from pathlib import Path
 
 import anyio
 import anyio.from_thread
@@ -12,6 +14,11 @@ import anyio.to_thread
 
 from btmc.protocol.client import Client
 from btmc.protocol.torrent import TorrentState
+from btmc.types import PieceIndex
+
+_LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
+"""The header before each member's data, ending with the lengths of its name and extra field"""
+_LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
 
 
 class TorrentZip:
@@ -35,7 +42,7 @@ class TorrentZip:
         self._zip: zipfile.ZipFile | None = None
         self._ranges: dict[str, tuple[int, int]] = {}
         self._opening = anyio.Lock()
-        """So only one :class:`zipfile.ZipFile` is made, as two would share the file's position"""
+        """So the index is only read once, by one :class:`zipfile.ZipFile`"""
 
     async def open(self) -> zipfile.ZipFile:
         """Read the zip's index, and open it"""
@@ -50,9 +57,9 @@ class TorrentZip:
 
     async def read(self, name: str) -> bytes:
         """Read a member of the zip, fetching only the pieces it's in"""
-        zf = await self.open()
         await self._fetch_member(name)
-        return await anyio.to_thread.run_sync(zf.read, name)
+        with await self._open_file(name) as file:
+            return await anyio.to_thread.run_sync(file.read)
 
     async def lines(self, name: str, batch_size: int) -> AsyncIterator[list[bytes]]:
         """
@@ -61,18 +68,42 @@ class TorrentZip:
 
         Fetches all of the member's pieces to disk first, like :meth:`.read`.
         """
-        zf = await self.open()
         await self._fetch_member(name)
-        with await anyio.to_thread.run_sync(zf.open, name) as member:
-            while batch := await anyio.to_thread.run_sync(_read_lines, member, batch_size):
+        with await self._open_file(name) as file:
+            while batch := await anyio.to_thread.run_sync(_read_lines, file, batch_size):
                 yield batch
+
+    async def extract(self, name: str, dest: Path) -> None:
+        """Write a member to a file, fetching all of its pieces first"""
+        await self._fetch_member(name)
+        with await self._open_file(name) as file:
+            await anyio.to_thread.run_sync(_copy_to, file, dest)
+
+    async def open_member(self, name: str) -> "ZipMember":
+        """Open a member for reading at any offset, fetching just the pieces each read needs"""
+        return ZipMember(await self._open_file(name))
+
+    def pieces(self, name: str) -> list[PieceIndex]:
+        """The pieces a member is in, once the zip is :meth:`.open`"""
+        if name not in self._ranges:
+            raise KeyError(f"there is no item named {name} in the zip")
+        ranges = self.torrent.layout.byte_range_pieces(self.path, *self._ranges[name])
+        return [piece.piece_idx for piece in ranges]
 
     async def _fetch_member(self, name: str) -> None:
         """Fetch all of a member's pieces at once, not a piece at a time as zipfile reads it"""
-        if name not in self._ranges:
-            raise KeyError(f"there is no item named {name} in the zip")
-        pieces = self.torrent.layout.byte_range_pieces(self.path, *self._ranges[name])
-        await self.client.fetch(self.torrent, (piece.piece_idx for piece in pieces))
+        await self.open()
+        await self.client.fetch(self.torrent, self.pieces(name))
+
+    async def _open_file(self, name: str) -> zipfile.ZipExtFile:
+        """
+        A member as a file, reading the zip through a file object of its own.
+        Members opened by :class:`zipfile.ZipFile` share its file object, and so a lock,
+        so reading one would wait while another waits for pieces.
+        """
+        info = (await self.open()).getinfo(name)
+        reader = _BlockingReader(self.client, self.torrent, self.path)
+        return await anyio.to_thread.run_sync(_member_file, reader, info)
 
     @staticmethod
     def _member_ranges(zf: zipfile.ZipFile) -> dict[str, tuple[int, int]]:
@@ -85,6 +116,27 @@ class TorrentZip:
         infos = sorted(zf.infolist(), key=lambda i: i.header_offset)
         ends = [i.header_offset for i in infos[1:]] + [zf.start_dir]
         return {i.filename: (i.header_offset, end) for i, end in zip(infos, ends)}
+
+
+class ZipMember:
+    """
+    An open member of a :class:`.TorrentZip`, read at any offset.
+
+    Uncompressed members seek straight to the offset. Compressed ones are unzipped up to it,
+    from the start again when seeking backwards.
+    """
+
+    def __init__(self, file: io.BufferedIOBase):
+        self._file = file
+        self._lock = anyio.Lock()
+        """Reads have to take turns, since each one seeks first"""
+
+    async def read(self, offset: int, size: int) -> bytes:
+        async with self._lock:
+            return await anyio.to_thread.run_sync(_read_at, self._file, offset, size)
+
+    def close(self) -> None:
+        self._file.close()
 
 
 class _BlockingReader(io.RawIOBase):
@@ -127,6 +179,31 @@ class _BlockingReader(io.RawIOBase):
         return len(data)
 
 
+def _member_file(reader: "_BlockingReader", info: zipfile.ZipInfo) -> zipfile.ZipExtFile:
+    """Like :meth:`zipfile.ZipFile.open`, but reading through ``reader``"""
+    reader.seek(info.header_offset)
+    header = reader.read(_LOCAL_HEADER.size)
+    if len(header) != _LOCAL_HEADER.size:
+        raise zipfile.BadZipFile(f"truncated header for {info.filename}")
+    signature, *_, name_length, extra_length = _LOCAL_HEADER.unpack(header)
+    if signature != _LOCAL_HEADER_SIGNATURE:
+        raise zipfile.BadZipFile(f"bad header for {info.filename}")
+    reader.seek(name_length + extra_length, io.SEEK_CUR)
+    return zipfile.ZipExtFile(reader, "r", info, close_fileobj=True)
 
-def _read_lines(f: IO[bytes], n: int) -> list[bytes]:
+
+def _copy_to(f: io.BufferedIOBase, dest: Path) -> None:
+    """Copy in one worker thread call, since reading and writing both block"""
+    with dest.open("wb") as out:
+        shutil.copyfileobj(f, out)
+
+
+def _read_lines(f: io.BufferedIOBase, n: int) -> list[bytes]:
+    """Read in one worker thread call, since iterating the file is what blocks"""
     return list(islice(f, n))
+
+
+def _read_at(f: io.BufferedIOBase, offset: int, size: int) -> bytes:
+    """Seek and read in one worker thread call, since both can block"""
+    f.seek(offset)
+    return f.read(size)

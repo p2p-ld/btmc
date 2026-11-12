@@ -10,6 +10,7 @@ dependencies = [
     "bencode-rs>=0.0.7",
     "httpx>=0.28.1",
     "anyio>=4.5",
+    "platformdirs>=4.3",
 ]
 requires-python = ">=3.12"
 readme = "README.md"
@@ -39,11 +40,15 @@ cli = [
 fsspec = [
     "fsspec>=2025.3.0",
 ]
+mount = [
+    "btmc[fsspec]",
+    "mfusepy>=3.1.1",
+]
 mypy = [
-    "btmc[cli,fsspec]",
+    "btmc[cli,mount]",
 ]
 tests = [
-    "btmc[cli,fsspec]",
+    "btmc[cli,mount]",
     # no wheels for 3.14 yet
     "libtorrent>=2.0.11; python_version<'3.14'",
     "pytest>=8.3.5",
@@ -58,7 +63,7 @@ dev = [
     "sphinx-autobuild>=2024.10.3",
 ]
 docs = [
-    "btmc[cli,fsspec]",
+    "btmc[cli,mount]",
     "sphinx>=8.2.3",
     "furo>=2024.8.6",
     "myst-parser>=4.0.1",
@@ -188,8 +193,8 @@ module = "torrent_models.*"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-# fsspec has no type annotations
-module = "fsspec.*"
+# fsspec and mfusepy have no type annotations
+module = ["fsspec.*", "mfusepy"]
 ignore_missing_imports = true
 
 [tool.pytest]

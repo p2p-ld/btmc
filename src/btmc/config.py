@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
+import platformdirs
+
 CONFIG_FILE = "btmc.toml"
 """Where :meth:`.Config.from_toml` looks by default, in the current directory"""
 
@@ -91,11 +93,22 @@ class Config:
 
     # ---- state ----
 
+    cache_dir: Path = dataclasses.field(
+        default_factory=lambda: platformdirs.user_cache_path("btmc")
+    )
+    """
+    Where to keep fetched pieces when nothing says where to download to,
+    in a directory for each torrent named by its info hash.
+    Defaults to the user cache directory, like ``~/Library/Caches/btmc`` on macOS
+    and ``~/.cache/btmc`` on Linux.
+    """
     state_file: Path | None = None
     """Where to keep state between runs, like banned peers. ``None`` keeps nothing."""
 
     def __post_init__(self) -> None:
         # paths come from TOML as strings
+        if isinstance(self.cache_dir, str):
+            self.cache_dir = Path(self.cache_dir).expanduser()
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
 
