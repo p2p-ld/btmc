@@ -173,7 +173,7 @@ class Peer:
         return peer
 
     def __repr__(self) -> str:
-        return f"<Peer {self.addr[0]}:{self.addr[1]}>"
+        return f"<Peer {self.addr}>"
 
     @property
     def closed(self) -> bool:

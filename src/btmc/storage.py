@@ -2,23 +2,11 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
+from torrent_models import safe_join
 from torrent_models.types.v1 import V1PieceRange
 from torrent_models.types.v2 import BLOCK_SIZE, V2PieceRange
 
 from btmc.protocol.messages import Bitfield
-
-
-def safe_join(root: Path, path: str) -> Path:
-    """
-    ``root / path``, refusing paths that would end up outside of root.
-
-    Paths in torrents and zips come from strangers.
-    """
-    root = root.resolve()
-    joined = (root / path).resolve()
-    if not joined.is_relative_to(root):
-        raise ValueError(f"{path} is outside of {root}")
-    return joined
 
 
 class PieceStore:

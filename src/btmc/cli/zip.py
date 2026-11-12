@@ -6,12 +6,11 @@ from typing import Any
 import anyio
 import click
 from rich.console import Console
-from torrent_models import Torrent
+from torrent_models import Torrent, safe_join
 
 from btmc.cli.common import echo, running_client, torrent_options
 from btmc.cli.progress import TorrentProgress
 from btmc.files.zip import TorrentZip
-from btmc.storage import safe_join
 from btmc.types import Addr
 
 
