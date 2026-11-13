@@ -1,6 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ except ImportError:
 __all__ = [
     "FakeSeeder",
     "LtSeeder",
+    "Stuck",
     "fake_seeder",
     "seeders",
 ]
@@ -73,6 +75,15 @@ class LtSeeder:
         self.ses.pause()
 
 
+class Stuck(Enum):
+    """Where a :class:`.FakeSeeder` goes quiet"""
+
+    HANDSHAKE = "handshake"
+    """It reads our handshake, and never answers"""
+    REQUESTS = "requests"
+    """It unchokes us, and never answers a request"""
+
+
 class FakeSeeder:
     """
     A seeder that only answers to some info hashes, like a v1-only or v2-only client would
@@ -80,7 +91,10 @@ class FakeSeeder:
 
     With ``corrupt``, every block it sends is wrong, the same way each time, like a peer
     with a bad disk. With ``drop_after``, it closes each connection after sending that many
-    blocks, leaving whatever else was asked of it unanswered.
+    blocks, leaving whatever else was asked of it unanswered. With ``stuck``, it goes quiet,
+    keeping the connection open until the other side closes it.
+
+    It counts the connections it has open and the requests it's had, as it sees them.
     """
 
     def __init__(
@@ -90,14 +104,20 @@ class FakeSeeder:
         accept: set[bytes],
         corrupt: bool = False,
         drop_after: int | None = None,
+        stuck: Stuck | None = None,
     ):
         self.layout = torrent.layout
         self.source_dir = source_dir
         self.accept = accept
         self.corrupt = corrupt
         self.drop_after = drop_after
+        self.stuck = stuck
         self.peer_id = b"-FAKE00-" + os.urandom(12)
         self.refused = 0
+        self.open = 0
+        self.requests = 0
+        self.counted = asyncio.Condition()
+        """Notified whenever ``open`` or ``requests`` changes"""
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
@@ -108,10 +128,17 @@ class FakeSeeder:
         self._server.close()
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async with self.counted:
+            self.open += 1
+            self.counted.notify_all()
         try:
             handshake = Handshake.decode(await reader.readexactly(Handshake.LENGTH))
             if handshake.info_hash not in self.accept:
                 self.refused += 1
+                return
+            if self.stuck is Stuck.HANDSHAKE:
+                # returns once the other side closes the connection
+                await reader.read()
                 return
             writer.write(Handshake(handshake.info_hash, self.peer_id).encode())
             writer.write(BitfieldMessage(Bitfield.full(self.layout.n_pieces)).encode())
@@ -122,6 +149,11 @@ class FakeSeeder:
                 body = await reader.readexactly(length) if length else b""
                 msg = PeerMessage.decode(length.to_bytes(4) + body)
                 if isinstance(msg, Request):
+                    async with self.counted:
+                        self.requests += 1
+                        self.counted.notify_all()
+                    if self.stuck is Stuck.REQUESTS:
+                        continue
                     data = self.layout.piece_range(msg.index).read(self.source_dir)
                     block = data[msg.begin : msg.begin + msg.length]
                     if self.corrupt:
@@ -133,6 +165,9 @@ class FakeSeeder:
             pass
         finally:
             writer.close()
+            async with self.counted:
+                self.open -= 1
+                self.counted.notify_all()
 
 
 @pytest.fixture(scope="session")
@@ -169,10 +204,14 @@ async def fake_seeder(test_data: Path) -> AsyncIterator[Callable[..., Awaitable[
     started = []
 
     async def start(
-        torrent: Torrent, accept: set[bytes], corrupt: bool = False, drop_after: int | None = None
+        torrent: Torrent,
+        accept: set[bytes],
+        corrupt: bool = False,
+        drop_after: int | None = None,
+        stuck: Stuck | None = None,
     ) -> FakeSeeder:
         seeder = FakeSeeder(
-            torrent, test_data, accept=accept, corrupt=corrupt, drop_after=drop_after
+            torrent, test_data, accept=accept, corrupt=corrupt, drop_after=drop_after, stuck=stuck
         )
         await seeder.start()
         started.append(seeder)
