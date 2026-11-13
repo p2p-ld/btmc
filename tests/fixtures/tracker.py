@@ -43,7 +43,8 @@ class MiniTracker:
 
     ``only[info_hash] = {ports}`` limits which peers it hands out for an info hash,
     to split a hybrid torrent's swarms. Announces over HTTP for info hashes in ``refuse``
-    are refused. ``interval`` is how long it tells clients to wait between announces.
+    are refused. With ``unresponsive``, announces over HTTP are taken, but never answered.
+    ``interval`` is how long it tells clients to wait between announces.
     """
 
     def __init__(self, urls: TrackerUrls):
@@ -67,6 +68,7 @@ class MiniTracker:
         """
         self.only: dict[bytes, set[int]] = {}
         self.refuse: set[bytes] = set()
+        self.unresponsive = False
         self.interval = 60
 
     async def start(self) -> None:
@@ -123,6 +125,10 @@ class MiniTracker:
                     params.get(b"event", b"").decode(),
                 )
                 body = bencode_rs.bencode({"interval": self.interval, "peers": compact(peers)})
+            if self.unresponsive:
+                # until the client gives up
+                await reader.read()
+                return
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n"
                 b"Content-Length: %d\r\n\r\n" % len(body) + body
