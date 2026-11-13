@@ -56,7 +56,6 @@ PEER_ID = bytes(range(20, 40))
         ),
         # an extension message (BEP 10) we don't speak
         (Unknown(20, b"\x00d1:md2:ut_pexi1eee"), b"\x00\x00\x00\x14\x14\x00d1:md2:ut_pexi1eee"),
-        (Handshake(INFO_HASH, PEER_ID), b"\x13BitTorrent protocol" + bytes(8) + INFO_HASH + PEER_ID)
     ],
 )
 def test_peer_messages(msg, data):
@@ -67,6 +66,14 @@ def test_peer_messages(msg, data):
     assert msg.encode() == data
     assert PeerMessage.decode(data) == msg
     assert type(msg).decode(data) == msg
+
+
+def test_handshake():
+    """The handshake comes first, with no length prefix, so only Handshake reads it"""
+    msg = Handshake(INFO_HASH, PEER_ID)
+    data = b"\x13BitTorrent protocol" + bytes(8) + INFO_HASH + PEER_ID
+    assert msg.encode() == data
+    assert Handshake.decode(data) == msg
 
 
 @pytest.mark.parametrize(
