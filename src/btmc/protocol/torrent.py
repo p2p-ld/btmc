@@ -97,12 +97,16 @@ class TorrentState:
         """A copy of the pieces that are checked and written"""
         return Bitfield(self.n_pieces, bytes(self.picker.have.bits))
 
-    async def fetch(self, pieces: Iterable[PieceIndex] | None = None) -> None:
+    async def fetch(
+        self, pieces: Iterable[PieceIndex] | None = None, *, timeout: float | None = None
+    ) -> None:
         """
         Fetch pieces, or all of them by default, returning once they're all checked and written.
-        A caller that stops waiting doesn't stop them being fetched.
+        Raises TimeoutError if they aren't within ``timeout`` seconds.
+        A caller that stops waiting, or times out, doesn't stop them being fetched.
         """
-        await self.picker.wait(pieces if pieces is not None else range(self.n_pieces))
+        with anyio.fail_after(timeout):
+            await self.picker.wait(pieces if pieces is not None else range(self.n_pieces))
 
     async def read(self, path: str, start: int, end: int) -> bytes:
         """Bytes [start, end) of a file in the torrent, fetching whatever pieces hold them"""

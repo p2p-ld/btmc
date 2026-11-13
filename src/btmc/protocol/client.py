@@ -220,9 +220,15 @@ class Client:
         """See :attr:`.TorrentState.have`"""
         return t.have
 
-    async def fetch(self, t: TorrentState, pieces: Iterable[PieceIndex] | None = None) -> None:
+    async def fetch(
+        self,
+        t: TorrentState,
+        pieces: Iterable[PieceIndex] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> None:
         """See :meth:`.TorrentState.fetch`"""
-        await t.fetch(pieces)
+        await t.fetch(pieces, timeout=timeout)
 
     async def read(self, t: TorrentState, path: str, start: int, end: int) -> bytes:
         """See :meth:`.TorrentState.read`"""
