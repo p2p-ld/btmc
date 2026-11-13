@@ -1,5 +1,6 @@
 """Coordinating many torrents"""
 
+import asyncio
 import contextlib
 import os
 from collections.abc import Callable, Iterable, Sequence
@@ -43,8 +44,8 @@ class Client:
     limits, banned peers and tracker backoffs), saves and loads what should outlast it,
     and hands each incoming connection to its torrent.
 
-    Use it with ``async with``, or call :meth:`.start` and then :meth:`.stop`
-    from the same task. A client can only be started once.
+    Use it with ``async with``, or call :meth:`.start` and later :meth:`.stop`,
+    from any task. A client can only be started once.
     Add torrents with :meth:`.add`, then :meth:`.fetch` pieces or :meth:`.read` bytes of files
     from them, as many times as needed, from as many tasks as needed.
     Adding a torrent that's already there returns the same one,
@@ -61,11 +62,13 @@ class Client:
         self._torrents: set[TorrentState] = set()
         self._by_hash: dict[bytes, TorrentState] = {}
         """info hash, see :func:`.wire_hash` -> torrent. Hybrids are in here twice."""
-        self._stack = contextlib.AsyncExitStack()
         self._shared: Shared | None = None
         self._tg: TaskGroup | None = None
-        self._started = anyio.Event()
-        self._stopped = anyio.Event()
+        self._task: asyncio.Task[None] | None = None
+        """The task the client runs in, see :meth:`.start`"""
+        self._running = asyncio.Event()
+        """Set while the client runs, from when it's started until it starts stopping"""
+        self._stopping = asyncio.Event()
         self._callbacks: dict[ClientEvent, list[TorrentCallback]] = {"added": [], "removed": []}
 
     async def __aenter__(self) -> "Client":
@@ -77,50 +80,85 @@ class Client:
 
     async def start(self) -> None:
         """
-        Open the HTTP client, start listening if we do, and load saved state.
-        Raises RuntimeError if the client was started before.
+        Open the HTTP client, start listening if we do, and load saved state,
+        returning once the client is running. Raises RuntimeError if it was started before.
         """
-        if self._started.is_set():
+        if self._task is not None:
             raise RuntimeError("a client can only be started once")
-        self._started.set()
+        # what start opens has to be closed in the same task, so the client runs in a task
+        # of its own, and start and stop can be called from any task
+        self._task = asyncio.create_task(self._run())
+        running = asyncio.create_task(self._running.wait())
         try:
-            http = await self._stack.enter_async_context(httpx.AsyncClient())
-            port = self.config.port
-            listener = None
-            if self.config.listen_host is not None:
-                listener = await anyio.create_tcp_listener(
-                    local_host=self.config.listen_host, local_port=port
-                )
-                self._stack.push_async_callback(listener.aclose)
-                port = listener.extra(SocketAttribute.local_port)
-            self._shared = Shared(self.config, self.peer_id, port=port, http=http)
-            state_file = self.config.state_file
-            if state_file is not None:
-                await anyio.to_thread.run_sync(self._shared.load, state_file)
-                self._stack.push_async_callback(self._save_state, state_file)
-            self._tg = await self._stack.enter_async_context(anyio.create_task_group())
-            if listener is not None:
-                self._tg.start_soon(listener.serve, self._incoming)
+            # wait for either the task to crash or the running flag to get set
+            await asyncio.wait([self._task, running], return_when=asyncio.FIRST_COMPLETED)
         except BaseException:
-            await self.stop()
+            self._stopping.set()
             raise
+        finally:
+            # if task crashed, (running was never set), cancel the task.
+            running.cancel()
+        if self._task.done():
+            # if we reach here with the task done (crashed),
+            # awaiting raises the error from it.
+            await self._task
 
     async def stop(self) -> None:
         """
         Stop every torrent, save state, and close everything :meth:`.start` opened.
-        Does nothing if the client isn't running.
+        Raises whatever the client stopped running with, if anything.
+        Does nothing if the client was never started.
         """
-        if not self._started.is_set() or self._stopped.is_set():
+        if self._task is None:
             return
-        self._stopped.set()
-        with anyio.CancelScope(shield=True):
-            async with anyio.create_task_group() as tg:
-                for t in list(self._torrents):
-                    tg.start_soon(t.stop)
-        if self._tg is not None:
-            self._tg.cancel_scope.cancel()
+        self._stopping.set()
+        # so a caller that stops waiting doesn't cancel the client partway through stopping
+        await asyncio.shield(self._task)
+
+    async def _run(self) -> None:
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                # start listeners
+                http = await stack.enter_async_context(httpx.AsyncClient())
+                port = self.config.port
+                listener = None
+                if self.config.listen_host is not None:
+                    listener = await anyio.create_tcp_listener(
+                        local_host=self.config.listen_host, local_port=port
+                    )
+                    stack.push_async_callback(listener.aclose)
+                    port = listener.extra(SocketAttribute.local_port)
+
+                # create shared state
+                self._shared = Shared(self.config, self.peer_id, port=port, http=http)
+                state_file = self.config.state_file
+                if state_file is not None:
+                    await anyio.to_thread.run_sync(self._shared.load, state_file)
+                    stack.push_async_callback(self._save_state, state_file)
+
+                # run them torrents
+                async with anyio.create_task_group() as tg:
+                    self._tg = tg
+                    if listener is not None:
+                        tg.start_soon(listener.serve, self._incoming)
+                    self._running.set()
+                    await self._stopping.wait()
+
+                    # closing...
+                    self._running.clear()
+                    with anyio.CancelScope(shield=True):
+                        async with anyio.create_task_group() as stopping:
+                            for t in list(self._torrents):
+                                stopping.start_soon(t.stop)
+                    tg.cancel_scope.cancel()
+        finally:
             self._tg = None
-        await self._stack.aclose()
+            self._running.clear()
+
+    @property
+    def running(self) -> bool:
+        """Whether the client has started, and isn't stopping or stopped"""
+        return self._running.is_set()
 
     async def _save_state(self, path: Path) -> None:
         assert self._shared is not None
@@ -166,8 +204,9 @@ class Client:
             trackers: tracker tiers to use instead of the torrent's own
             known_peers: peers to connect to without asking a tracker
         """
-        if self._tg is None or self._shared is None:
+        if not self.running:
             raise RuntimeError("the client isn't running")
+        assert self._tg is not None and self._shared is not None
         existing = self.get(torrent_name(torrent))
         if existing is not None:
             return existing
@@ -177,7 +216,7 @@ class Client:
         self._torrents.add(t)
         for info_hash in t.info_hashes:
             self._by_hash[info_hash] = t
-        self._tg.start_soon(self._run, t)
+        self._tg.start_soon(self._run_torrent, t)
         for callback in self._callbacks["added"]:
             callback(t)
         return t
@@ -193,7 +232,7 @@ class Client:
             await t.stop()
             self._forget(t)
 
-    async def _run(self, t: TorrentState) -> None:
+    async def _run_torrent(self, t: TorrentState) -> None:
         try:
             await t.run()
         finally:

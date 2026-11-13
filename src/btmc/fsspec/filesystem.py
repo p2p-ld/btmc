@@ -25,7 +25,6 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import anyio
 from fsspec.asyn import AbstractAsyncStreamedFile, AsyncFileSystem, sync
 from fsspec.spec import AbstractBufferedFile
 from torrent_models import Torrent
@@ -145,8 +144,6 @@ class TorrentFileSystem(AsyncFileSystem):
         self.config = config
         self._client: Client | None = None
         self._client_lock = asyncio.Lock()
-        self._host: tuple[asyncio.Task, anyio.Event] | None = None
-        """The task the client runs in, and the event that stops it"""
         self._finalizer: weakref.finalize | None = None
         self._trees: dict[str, _Tree] = {}
         self._zip_dirs: dict[tuple[str, str], _ZipDir] = {}
@@ -282,17 +279,12 @@ class TorrentFileSystem(AsyncFileSystem):
     async def get_client(self) -> Client:
         """The client, started on the filesystem's event loop the first time it's needed"""
         async with self._client_lock:
-            if self._client is None:
-                ready, stop = anyio.Event(), anyio.Event()
-                task = asyncio.create_task(self._host_client(ready, stop))
-                self._host = (task, stop)
-                await ready.wait()
-                if self._client is None:
-                    # raise whatever stopped the client from starting
-                    await task
+            if self._client is None or not self._client.running:
+                client = Client(config=self.config)
+                await client.start()
+                self._client = client
                 if not self.asynchronous:
-                    self._finalizer = weakref.finalize(self, self._stop_client, self.loop, stop)
-        assert self._client is not None
+                    self._finalizer = weakref.finalize(self, self._stop_client, self.loop, client)
         return self._client
 
     async def torrent_state(self, torrent: Torrent[Any]) -> TorrentState:
@@ -343,33 +335,19 @@ class TorrentFileSystem(AsyncFileSystem):
 
     # ---- private ----
 
-    async def _host_client(self, ready: anyio.Event, stop: anyio.Event) -> None:
-        # the client has to be opened and closed in the same task,
-        # and fsspec runs each call in a task of its own
-        try:
-            async with Client(config=self.config) as client:
-                self._client = client
-                ready.set()
-                await stop.wait()
-        finally:
-            self._client = None
-            ready.set()
-
     @staticmethod
-    def _stop_client(loop: asyncio.AbstractEventLoop | None, stop: anyio.Event) -> None:
+    def _stop_client(loop: asyncio.AbstractEventLoop | None, client: Client) -> None:
         if loop is not None and loop.is_running():
-            loop.call_soon_threadsafe(stop.set)
+            asyncio.run_coroutine_threadsafe(client.stop(), loop)
 
     async def _close(self) -> None:
         if self._finalizer is not None:
             self._finalizer.detach()
         # their zips read through the client being stopped
         self._zip_dirs.clear()
-        if self._host is not None:
-            task, stop = self._host
-            self._host = None
-            stop.set()
-            await task
+        if self._client is not None:
+            client, self._client = self._client, None
+            await client.stop()
 
     def _tree(self, torrent: Torrent[Any]) -> _Tree:
         name = torrent_name(torrent)
