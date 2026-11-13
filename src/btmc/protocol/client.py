@@ -87,21 +87,14 @@ class Client:
             raise RuntimeError("a client can only be started once")
         # what start opens has to be closed in the same task, so the client runs in a task
         # of its own, and start and stop can be called from any task
-        self._task = asyncio.create_task(self._run())
-        running = asyncio.create_task(self._running.wait())
+        # resolved by _run once the client is running, or failed with what stopped it starting
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._task = asyncio.create_task(self._run(ready))
         try:
-            # wait for either the task to crash or the running flag to get set
-            await asyncio.wait([self._task, running], return_when=asyncio.FIRST_COMPLETED)
+            await ready
         except BaseException:
             self._stopping.set()
             raise
-        finally:
-            # if task crashed, (running was never set), cancel the task.
-            running.cancel()
-        if self._task.done():
-            # if we reach here with the task done (crashed),
-            # awaiting raises the error from it.
-            await self._task
 
     async def stop(self) -> None:
         """
@@ -115,7 +108,7 @@ class Client:
         # so a caller that stops waiting doesn't cancel the client partway through stopping
         await asyncio.shield(self._task)
 
-    async def _run(self) -> None:
+    async def _run(self, ready: asyncio.Future[None]) -> None:
         try:
             async with contextlib.AsyncExitStack() as stack:
                 # start listeners
@@ -142,6 +135,9 @@ class Client:
                     if listener is not None:
                         tg.start_soon(listener.serve, self._incoming)
                     self._running.set()
+                    # done already if start's caller was cancelled
+                    if not ready.done():
+                        ready.set_result(None)
                     await self._stopping.wait()
 
                     # closing...
@@ -151,7 +147,14 @@ class Client:
                             for t in list(self._torrents):
                                 stopping.start_soon(t.stop)
                     tg.cancel_scope.cancel()
+        except Exception as e:
+            if ready.done():
+                raise
+            # start raises it
+            ready.set_exception(e)
         finally:
+            # wakes start if this was cancelled while starting, does nothing otherwise
+            ready.cancel()
             self._tg = None
             self._running.clear()
 
