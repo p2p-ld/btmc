@@ -76,16 +76,26 @@ class LtSeeder:
 class FakeSeeder:
     """
     A seeder that only answers to some info hashes, like a v1-only or v2-only client would
-    in a hybrid torrent's swarm, and can send junk instead of data.
+    in a hybrid torrent's swarm.
+
+    With ``corrupt``, every block it sends is wrong, the same way each time, like a peer
+    with a bad disk. With ``drop_after``, it closes each connection after sending that many
+    blocks, leaving whatever else was asked of it unanswered.
     """
 
     def __init__(
-        self, torrent: Torrent, source_dir: Path, accept: set[bytes], corrupt: bool = False
+        self,
+        torrent: Torrent,
+        source_dir: Path,
+        accept: set[bytes],
+        corrupt: bool = False,
+        drop_after: int | None = None,
     ):
         self.layout = torrent.layout
         self.source_dir = source_dir
         self.accept = accept
         self.corrupt = corrupt
+        self.drop_after = drop_after
         self.peer_id = b"-FAKE00-" + os.urandom(12)
         self.refused = 0
 
@@ -106,7 +116,8 @@ class FakeSeeder:
             writer.write(Handshake(handshake.info_hash, self.peer_id).encode())
             writer.write(BitfieldMessage(Bitfield.full(self.layout.n_pieces)).encode())
             writer.write(Unchoke().encode())
-            while True:
+            sent = 0
+            while sent != self.drop_after:
                 length = int.from_bytes(await reader.readexactly(4))
                 body = await reader.readexactly(length) if length else b""
                 msg = PeerMessage.decode(length.to_bytes(4) + body)
@@ -114,9 +125,10 @@ class FakeSeeder:
                     data = self.layout.piece_range(msg.index).read(self.source_dir)
                     block = data[msg.begin : msg.begin + msg.length]
                     if self.corrupt:
-                        block = os.urandom(len(block))
+                        block = bytes(b ^ 0xFF for b in block)
                     writer.write(Piece(msg.index, msg.begin, block).encode())
                     await writer.drain()
+                    sent += 1
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
@@ -128,10 +140,11 @@ async def seeders(
     torrent_files: dict[TorrentVersion, Path],
     torrents: dict[TorrentVersion, Torrent],
     test_data: Path,
-    tracker_server: MiniTracker,
+    tracker: MiniTracker,
 ) -> AsyncIterator[list[LtSeeder]]:
     """
-    Two libtorrent seeders, seeding all the :func:`.torrents`, and in the tracker's swarms.
+    Two libtorrent seeders, seeding all the :func:`.torrents`, and in the tracker's swarms,
+    which they're kept in when it's reset.
 
     Shared by the whole session, because they take a few seconds to start announcing.
     """
@@ -141,25 +154,26 @@ async def seeders(
             seeder.add(version, path, test_data)
     await asyncio.gather(*(seeder.wait_seeding() for seeder in seeders))
     hashes = [h for t in torrents.values() for h in info_hashes(t)]
-    while not all(len(tracker_server.swarms[h]) >= 2 for h in hashes):
+    addrs = {s.addr for s in seeders}
+    while not all(addrs <= set(tracker.swarms[h].values()) for h in hashes):
         await asyncio.sleep(0.1)
+    tracker.keep()
     yield seeders
     for seeder in seeders:
         seeder.close()
 
 
 @pytest.fixture
-async def fake_seeder(
-    test_data: Path, tracker: MiniTracker
-) -> AsyncIterator[Callable[..., Awaitable[FakeSeeder]]]:
-    """
-    Start :class:`.FakeSeeder` s, which are stopped and taken out of the tracker's swarms
-    after the test
-    """
+async def fake_seeder(test_data: Path) -> AsyncIterator[Callable[..., Awaitable[FakeSeeder]]]:
+    """Start :class:`.FakeSeeder` s, which are stopped after the test"""
     started = []
 
-    async def start(torrent: Torrent, accept: set[bytes], corrupt: bool = False) -> FakeSeeder:
-        seeder = FakeSeeder(torrent, test_data, accept=accept, corrupt=corrupt)
+    async def start(
+        torrent: Torrent, accept: set[bytes], corrupt: bool = False, drop_after: int | None = None
+    ) -> FakeSeeder:
+        seeder = FakeSeeder(
+            torrent, test_data, accept=accept, corrupt=corrupt, drop_after=drop_after
+        )
         await seeder.start()
         started.append(seeder)
         return seeder
@@ -167,5 +181,3 @@ async def fake_seeder(
     yield start
     for seeder in started:
         await seeder.stop()
-        for swarm in tracker.swarms.values():
-            swarm.pop(seeder.peer_id, None)

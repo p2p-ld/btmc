@@ -189,11 +189,6 @@ pretty = true
 color_output = true
 
 [[tool.mypy.overrides]]
-# torrent-models has type annotations, but no py.typed marker
-module = "torrent_models.*"
-follow_untyped_imports = true
-
-[[tool.mypy.overrides]]
 # fsspec and mfusepy have no type annotations
 module = ["fsspec.*", "mfusepy"]
 ignore_missing_imports = true

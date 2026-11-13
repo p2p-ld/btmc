@@ -19,7 +19,7 @@ def config(request: pytest.FixtureRequest, tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-async def client(config: Config, tracker_server: MiniTracker) -> AsyncIterator[Client]:
+async def client(config: Config, tracker: MiniTracker) -> AsyncIterator[Client]:
     """
     A running client. After the test it stops, and every torrent it had
     has closed its connections and left the tracker's swarms.
@@ -30,7 +30,7 @@ async def client(config: Config, tracker_server: MiniTracker) -> AsyncIterator[C
         yield client
     for t in added:
         assert not t.swarm.peers
-    assert not tracker_server.swarms_of(client.peer_id)
+    assert not tracker.swarms_of(client.peer_id)
 
 
 @pytest.fixture

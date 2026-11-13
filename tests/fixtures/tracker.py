@@ -15,7 +15,7 @@ from btmc.types import Addr
 
 from .net import free_port
 
-__all__ = ["MiniTracker", "TrackerUrls", "tracker", "tracker_server", "tracker_urls"]
+__all__ = ["MiniTracker", "TrackerUrls", "reset_tracker", "tracker", "tracker_urls"]
 
 
 def compact(addrs: list[Addr]) -> bytes:
@@ -23,7 +23,7 @@ def compact(addrs: list[Addr]) -> bytes:
 
 
 class TrackerUrls(NamedTuple):
-    """The announce urls of the :func:`.tracker_server`, from the ports it listens on"""
+    """The announce urls of the :func:`.tracker`, from the ports it listens on"""
 
     http_port: int
     udp_port: int
@@ -48,7 +48,18 @@ class MiniTracker:
 
     def __init__(self, urls: TrackerUrls):
         self.urls = urls
-        self.swarms: dict[bytes, dict[bytes, Addr]] = defaultdict(dict)
+        self._kept: dict[bytes, dict[bytes, Addr]] = {}
+        self.reset()
+
+    def keep(self) -> None:
+        """Keep the peers in the swarms now through every :meth:`.reset`"""
+        self._kept = {info_hash: dict(swarm) for info_hash, swarm in self.swarms.items()}
+
+    def reset(self) -> None:
+        """Undo every announce and setting, apart from the peers it was told to :meth:`.keep`"""
+        self.swarms: dict[bytes, dict[bytes, Addr]] = defaultdict(
+            dict, {info_hash: dict(swarm) for info_hash, swarm in self._kept.items()}
+        )
         self.events: dict[bytes, asyncio.Queue[tuple[bytes, str]]] = defaultdict(asyncio.Queue)
         """
         peer id -> the info hash and event of each announce it made with an event,
@@ -151,18 +162,16 @@ class _DatagramServer(asyncio.DatagramProtocol):
 @pytest.fixture(scope="session")
 def tracker_urls() -> TrackerUrls:
     """
-    Where the :func:`.tracker_server` listens, picked without starting it,
+    Where the :func:`.tracker` listens, picked without starting it,
     for torrents that only need to name it
     """
     return TrackerUrls(http_port=free_port(), udp_port=free_port(socket.SOCK_DGRAM))
 
 
 @pytest.fixture(scope="session")
-async def tracker_server(
-    anyio_backend: str, tracker_urls: TrackerUrls
-) -> AsyncIterator[MiniTracker]:
+async def tracker(anyio_backend: str, tracker_urls: TrackerUrls) -> AsyncIterator[MiniTracker]:
     """
-    The tracker shared by the whole test session. Use :func:`.tracker` in tests.
+    The tracker shared by the whole test session, reset after each test that uses it.
     Asks for ``anyio_backend`` so sync tests can use it too.
     """
     tracker = MiniTracker(tracker_urls)
@@ -171,10 +180,9 @@ async def tracker_server(
     await tracker.stop()
 
 
-@pytest.fixture
-def tracker(tracker_server: MiniTracker) -> Iterator[MiniTracker]:
-    """The session's tracker, with any limits on what it hands out undone after the test"""
-    yield tracker_server
-    tracker_server.only = {}
-    tracker_server.refuse = set()
-    tracker_server.interval = 60
+@pytest.fixture(autouse=True)
+def reset_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
+    """After each test that used the tracker, undo what it did to it"""
+    yield
+    if "tracker" in request.fixturenames:
+        request.getfixturevalue("tracker").reset()

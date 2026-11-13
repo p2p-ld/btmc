@@ -33,8 +33,8 @@ def torrent_files(
 ) -> dict[TorrentVersion, Path]:
     """
     A .torrent file of the :func:`.test_data` for each version, made by libtorrent,
-    announcing to the :func:`.tracker_server`, all in one directory.
-    Clients that use their trackers need the :func:`.tracker_server` to be running.
+    announcing to the :func:`.tracker`, all in one directory.
+    Clients that use their trackers need the :func:`.tracker` to be running.
     """
     if lt is None:
         pytest.skip("libtorrent isn't installed")
