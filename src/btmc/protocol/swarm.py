@@ -37,8 +37,9 @@ What callbacks can be added for, see :meth:`.Swarm.add_callback`
 
 - ``"block"``: a block we asked for arrived. Called with the block, its data,
   and the address of the peer that sent it.
-- ``"connected"``, ``"disconnected"``: a peer's connection was made or ended,
-  see :data:`.PeerEvent`. Called with the peer.
+- ``"connected"``: a peer's connection was made, see :data:`.PeerEvent`. Called with the peer.
+- ``"disconnected"``: a peer that was ``"connected"`` has gone, and isn't in
+  :attr:`.Swarm.peers` any more. Called with the peer.
 """
 
 type BlockCallback = Callable[[Block, bytes, Addr], None]
@@ -239,8 +240,14 @@ class Swarm:
         peer.close(reason)
 
     def _peer_ended(self, peer: Peer, now: float) -> None:
-        """A connection ended: forget it, and wait before trying the peer again"""
+        """
+        A connection ended: forget it, say so if it had connected,
+        and wait before trying the peer again
+        """
         del self.peers[peer.addr]
+        if peer.connected_at is not None:
+            for callback in self._callbacks["disconnected"]:
+                callback(peer)
         candidate = self._candidates.get(peer.addr)
         if candidate is None or not peer.penalize:
             return
@@ -283,7 +290,6 @@ class Swarm:
         peer.add_callback("message", self._handle_message)
         peer.add_callback("released", self._released)
         peer.add_callback("connected", self._peer_connected)
-        peer.add_callback("disconnected", self._peer_disconnected)
         self.peers[peer.addr] = peer
         self._tg.start_soon(self._run_peer, peer)
 
@@ -332,10 +338,6 @@ class Swarm:
 
     def _peer_connected(self, peer: Peer) -> None:
         for callback in self._callbacks["connected"]:
-            callback(peer)
-
-    def _peer_disconnected(self, peer: Peer) -> None:
-        for callback in self._callbacks["disconnected"]:
             callback(peer)
 
     def _handle_message(self, peer: Peer, msg: PeerMessage) -> None:

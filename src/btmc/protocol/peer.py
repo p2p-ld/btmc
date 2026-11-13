@@ -67,7 +67,8 @@ What callbacks can be added for, see :meth:`.Peer.add_callback`
   connection closed. Called with the peer and the blocks we'd asked for, in order.
 - ``"connected"``: both handshakes are done, so messages can go back and forth.
   Called with the peer.
-- ``"disconnected"``: a connection that was ``"connected"`` ended. Called with the peer.
+- ``"disconnected"``: a connection that was ``"connected"`` has closed, and
+  :attr:`.Peer.close_reason` says why. Called with the peer.
 """
 
 type MessageCallback = Callable[[Peer, PeerMessage], None]
@@ -122,6 +123,8 @@ class Peer:
         self.config = shared.config
         self.remote_peer_id: bytes | None = None
         """Set once the peer's handshake arrives"""
+        self.connected_at: float | None = None
+        """When both handshakes were done, so messages could go back and forth"""
         self.has = Bitfield(n_pieces)
         self.choked = True
         self.interested = False
@@ -235,30 +238,32 @@ class Peer:
             raise
         finally:
             self.close(CloseReason.CONNECTION_LOST)
-            # last, because awaiting raises again if we're being cancelled
-            if connection is not None:
-                await anyio.aclose_forcefully(connection)
+            try:
+                # last, because awaiting raises again if we're being cancelled
+                if connection is not None:
+                    await anyio.aclose_forcefully(connection)
+            finally:
+                if self.connected_at is not None:
+                    for callback in self._callbacks["disconnected"]:
+                        callback(self)
 
     async def _receive_loop(self, connection: BufferedByteStream) -> None:
         try:
             if self.remote_peer_id is None:
                 handshake = Handshake.decode(await connection.receive_exactly(Handshake.LENGTH))
                 self._receive_handshake(handshake, anyio.current_time())
+            self.connected_at = anyio.current_time()
             for callback in self._callbacks["connected"]:
                 callback(self)
-            try:
-                while not self.closed:
-                    length = int.from_bytes(await connection.receive_exactly(4))
-                    if length > MAX_MESSAGE:
-                        raise PeerError(f"message of {length} bytes is too long")
-                    data = length.to_bytes(4) + await connection.receive_exactly(length)
-                    msg = self._receive(PeerMessage.decode(data), anyio.current_time())
-                    if msg is not None:
-                        for message_callback in self._callbacks["message"]:
-                            message_callback(self, msg)
-            finally:
-                for callback in self._callbacks["disconnected"]:
-                    callback(self)
+            while not self.closed:
+                length = int.from_bytes(await connection.receive_exactly(4))
+                if length > MAX_MESSAGE:
+                    raise PeerError(f"message of {length} bytes is too long")
+                data = length.to_bytes(4) + await connection.receive_exactly(length)
+                msg = self._receive(PeerMessage.decode(data), anyio.current_time())
+                if msg is not None:
+                    for message_callback in self._callbacks["message"]:
+                        message_callback(self, msg)
         except PeerError as e:
             self.close(CloseReason.PROTOCOL_ERROR, e)
         except PEER_ERRORS as e:
