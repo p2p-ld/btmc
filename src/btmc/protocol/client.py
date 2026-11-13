@@ -108,7 +108,7 @@ class Client:
         # so a caller that stops waiting doesn't cancel the client partway through stopping
         await asyncio.shield(self._task)
 
-    async def _run(self, ready: asyncio.Future[None]) -> None:
+    async def _run(self, ready: asyncio.Future) -> None:
         try:
             async with contextlib.AsyncExitStack() as stack:
                 # start listeners
@@ -147,14 +147,11 @@ class Client:
                             for t in list(self._torrents):
                                 stopping.start_soon(t.stop)
                     tg.cancel_scope.cancel()
-        except Exception as e:
-            if ready.done():
-                raise
-            # start raises it
-            ready.set_exception(e)
+        except BaseException as e:
+            if not ready.done():
+                ready.set_exception(e)
+            raise
         finally:
-            # wakes start if this was cancelled while starting, does nothing otherwise
-            ready.cancel()
             self._tg = None
             self._running.clear()
 
