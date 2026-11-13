@@ -305,9 +305,7 @@ class Swarm:
         tell the peers that have any of them we're interested, ask peers for blocks, and connect.
         A failed piece makes room for another to start, so every peer is asked.
         """
-        opened = Bitfield(self.n_pieces)
-        for index in pieces:
-            opened.add(index)
+        opened = Bitfield.from_pieces(self.n_pieces, pieces)
         for peer in self.peers.values():
             if opened.intersects(peer.has):
                 peer.set_interested(True)

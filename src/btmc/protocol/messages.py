@@ -17,7 +17,7 @@ from __future__ import annotations
 import ipaddress
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import IntEnum
 from math import ceil
@@ -312,6 +312,14 @@ class Bitfield:
         bits = cls(n_pieces, b"\xff" * ceil(n_pieces / 8))
         if n_pieces % 8:
             bits.bits[-1] = (0xFF << (8 - n_pieces % 8)) & 0xFF
+        return bits
+
+    @classmethod
+    def from_pieces(cls, n_pieces: int, pieces: Iterable[PieceIndex]) -> Bitfield:
+        """A bitfield with just these pieces"""
+        bits = cls(n_pieces)
+        for i in pieces:
+            bits.add(i)
         return bits
 
     def for_pieces(self, n_pieces: int) -> Bitfield:
