@@ -383,15 +383,16 @@ class Swarm:
         """
         while True:
             await self.picker.wait_for_wanted()
+            # another torrent might have found the tracker down while we waited
             await anyio.sleep_until(self.shared.tracker_ready_at(url))
-            await anyio.sleep(await self._announce(url, info_hash))
+            await anyio.sleep_until(await self._announce(url, info_hash))
             if not self.picker.n_wanted and (url, info_hash) in self.announced:
                 await self._announce_stopped(url, info_hash)
 
     async def _announce(self, url: str, info_hash: bytes) -> float:
         """
         Announce to a tracker, saying we started if it doesn't know about us yet,
-        and return how long to wait before announcing again
+        and return when to announce to it again
         """
         started = (url, info_hash) in self.announced
         event = AnnounceEvent.NONE if started else AnnounceEvent.STARTED
@@ -401,22 +402,23 @@ class Swarm:
                 response = await announce(url, request, http=self.shared.http, config=self.config)
         except TrackerRefused as e:
             log.debug("%s refused %s: %s", url, info_hash.hex(), e)
-            self.shared.announced(url, anyio.current_time())
-            return self.config.announce_retry
+            now = anyio.current_time()
+            self.shared.announced(url, now)
+            return now + self.config.announce_retry
         except TrackerError as e:
             log.debug("announce to %s failed: %s", url, e)
             self.shared.announced(url, anyio.current_time(), answered=False)
-            # the tracker's backoff, shared with the other torrents, says when to try again
-            return 0
-        self.shared.announced(url, anyio.current_time())
+            return self.shared.tracker_ready_at(url)
+        now = anyio.current_time()
+        self.shared.announced(url, now)
         log.debug("%s gave %d peers for %s", url, len(response.peers), info_hash.hex())
         self.announced.add((url, info_hash))
         for addr in response.peers:
             self.add_candidate(addr, info_hash)
-        self._connect(anyio.current_time())
+        self._connect(now)
         if response.interval is None:
-            return self.config.announce_retry
-        return min(
+            return now + self.config.announce_retry
+        return now + min(
             max(response.interval, self.config.min_announce_interval),
             self.config.max_announce_interval,
         )
