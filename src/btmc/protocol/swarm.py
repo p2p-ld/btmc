@@ -1,6 +1,5 @@
 import contextlib
 import logging
-from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict, overload
@@ -121,8 +120,8 @@ class Swarm:
         self.peers: dict[Addr, Peer] = {}
         self.announced: set[tuple[str, bytes]] = set()
         """(tracker, info hash) that know about us, so need telling when we stop"""
-        self.connections_made = 0
-        self.bytes_from: Counter[Addr] = Counter()
+        self._downloaded = 0
+        """Bytes of every block that's arrived, for announces"""
 
         self._callbacks: _Callbacks = {"block": [], "connected": [], "disconnected": []}
         self._candidates: dict[Addr, _Candidate] = {}
@@ -286,7 +285,6 @@ class Swarm:
         peer.add_callback("connected", self._peer_connected)
         peer.add_callback("disconnected", self._peer_disconnected)
         self.peers[peer.addr] = peer
-        self.connections_made += 1
         self._tg.start_soon(self._run_peer, peer)
 
     async def _run_peer(self, peer: Peer) -> None:
@@ -357,7 +355,7 @@ class Swarm:
                 # if this keeps getting tangled the peers might need the piece picker.
                 peer.set_interested(self.picker.peer_has_wanted_pieces(peer.has))
             case Piece(index=index, begin=begin, block=data):
-                self.bytes_from[peer.addr] += len(data)
+                self._downloaded += len(data)
                 for callback in self._callbacks["block"]:
                     callback(Block(index, begin, len(data)), data, peer.addr)
                 self._fill(peer)
@@ -442,7 +440,7 @@ class Swarm:
             info_hash=info_hash,
             peer_id=self.shared.peer_id,
             port=self.shared.port,
-            downloaded=sum(self.bytes_from.values()),
+            downloaded=self._downloaded,
             left=max(left, 0),
             event=event,
             numwant=self.config.numwant,

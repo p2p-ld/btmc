@@ -70,7 +70,6 @@ class Shared:
         """
         self._banned: set[Addr] = set()
         self._tracker_backoffs: dict[str, _TrackerBackoff] = {}
-        self._peak_connections = 0
         self._callbacks: dict[SharedEvent, list[BanCallback]] = {"ban": []}
 
     def add_callback(self, event: SharedEvent, callback: BanCallback) -> None:
@@ -133,12 +132,3 @@ class Shared:
         if path.exists():
             state = json.loads(path.read_text())
             self._banned |= {Addr(host, port) for host, port in state["banned"]}
-
-    def opened_connection(self) -> None:
-        """Note a connection that just took one of :attr:`.connections`"""
-        self._peak_connections = max(self._peak_connections, self.connections.borrowed_tokens)
-
-    @property
-    def peak_connections(self) -> int:
-        """The most connections that have been open at once"""
-        return self._peak_connections

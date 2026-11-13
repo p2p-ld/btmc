@@ -219,7 +219,6 @@ class Peer:
                 if self.closed:
                     return
                 async with self.shared.connections:
-                    self.shared.opened_connection()
                     if connection is None:
                         with anyio.fail_after(self.config.connect_timeout):
                             connection = BufferedByteStream(await anyio.connect_tcp(*self.addr))

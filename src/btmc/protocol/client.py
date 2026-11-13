@@ -134,10 +134,6 @@ class Client:
         assert self._shared is not None
         return self._shared.port
 
-    @property
-    def peak_connections(self) -> int:
-        return self._shared.peak_connections if self._shared is not None else 0
-
     def add_callback(self, event: ClientEvent, callback: TorrentCallback) -> None:
         """Call ``callback`` whenever ``event`` happens"""
         self._callbacks[event].append(callback)
