@@ -246,8 +246,8 @@ class PiecePicker:
             return None
         index, piece = first_open
         if not self._start(index, piece):
-            # it was all padding, so it's checking already, and peers are asked again once it's had
-            return None
+            # it was all padding, so it's checking already, and another piece might have blocks
+            return self.pick(has)
         return self._take(index, piece)
 
     def _start(self, index: PieceIndex, piece: _WantedPiece) -> bool:
