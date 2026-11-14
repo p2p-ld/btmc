@@ -20,20 +20,23 @@ jobs:
       matrix:
         # no windows: storage uses os.pwrite, and libtorrent's windows wheels are bugged
         platform: [ "ubuntu-latest", "macos-latest" ]
-        # libtorrent, which the tests use as a peer, has no wheels for 3.14 yet
-        python-version: [ "3.12", "3.13" ]
+        # libtorrent has no wheels for 3.14 and up yet, so the tests that need it are skipped there
+        python-version: [ "3.12", "3.13", "3.14", "3.15" ]
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-      - name: Install python
-        uses: actions/setup-python@v5
+      - name: Install python and pdm
+        uses: pdm-project/setup-pdm@v4
         with:
           python-version: ${{ matrix.python-version }}
+          cache: true
+      # the FUSE tests only need the library, not a mount, so its kernel extension isn't loaded
+      - name: Install macFUSE
+        if: runner.os == 'macOS'
+        run: brew install --cask macfuse
       - name: Install deps
-        run: |
-          python -m pip install pdm
-          pdm install --with tests
+        run: pdm install --check -G tests
       - name: Run tests
         run: |
           pdm run test
