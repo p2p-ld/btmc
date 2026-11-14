@@ -6,7 +6,7 @@ authors = [
     {name = "sneakers-the-rat", email = "sneakers-the-rat@protonmail.com"},
 ]
 dependencies = [
-    "torrent-models>=0.5.0",
+    "torrent-models>=0.6.0",
     "bencode-rs>=0.1.0",
     "httpx>=0.28.1",
     "anyio>=4.5",
@@ -26,6 +26,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Typing :: Typed"
 ]
 
@@ -52,7 +54,7 @@ mypy = [
 ]
 tests = [
     "btmc[cli,mount]",
-    # no wheels for 3.14 yet
+    # no wheels for 3.14 and up yet. The tests that need it are skipped without it.
     "libtorrent>=2.0.11; python_version<'3.14'",
     "pytest>=8.3.5",
     "pytest-cov>=6.0.0",
