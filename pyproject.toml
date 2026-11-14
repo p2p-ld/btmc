@@ -6,7 +6,7 @@ authors = [
     {name = "sneakers-the-rat", email = "sneakers-the-rat@protonmail.com"},
 ]
 dependencies = [
-    "torrent-models>=0.4.0",
+    "torrent-models>=0.5.0",
     "bencode-rs>=0.1.0",
     "httpx>=0.28.1",
     "anyio>=4.5",
