@@ -148,9 +148,13 @@ class Client:
                                 stopping.start_soon(t.stop)
                     tg.cancel_scope.cancel()
         except BaseException as e:
-            if not ready.done():
-                ready.set_exception(e)
-            raise
+            if ready.done():
+                raise
+            # a failure to start goes to start's caller, and nobody waits on this task after that,
+            # but cancellations still have to end it
+            ready.set_exception(e)
+            if not isinstance(e, Exception):
+                raise
         finally:
             self._tg = None
             self._running.clear()

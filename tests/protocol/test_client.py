@@ -329,7 +329,7 @@ async def test_start_and_stop(torrent, tmp_path):
 
 
 async def test_failed_start_closes(tmp_path):
-    """If starting fails partway, what was opened so far is closed"""
+    """If starting fails partway, what was opened so far is closed, and the error goes to start"""
     path = tmp_path / "state.json"
     path.write_text("not json")
     config = Config(download_dir=tmp_path, state_file=path, listen_host="127.0.0.1", port=0)
@@ -338,6 +338,8 @@ async def test_failed_start_closes(tmp_path):
         await client.start()
     assert client._shared is not None and client._shared.http.is_closed
     assert not client.running
+    # and nowhere else, so stopping has nothing to raise
+    await client.stop()
 
 
 @pytest.mark.parametrize("config", [{"max_connections": 1}], indirect=True)
