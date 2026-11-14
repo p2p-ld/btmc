@@ -172,6 +172,20 @@ async def test_incoming(client, torrent, version, one_torrent, seeders):
     assert torrent.check(one_torrent.store.root)
 
 
+@pytest.mark.parametrize("config", [{"listen_host": "127.0.0.1", "port": 0}], indirect=True)
+async def test_stopping_closes_connections_waiting_for_a_handshake(config):
+    """A connection that hasn't sent its handshake when the client stops is closed"""
+    async with (
+        Client(config=config) as client,
+        await anyio.connect_tcp("127.0.0.1", client.port) as remote,
+    ):
+        # the client takes the connection, and waits for the handshake
+        await anyio.wait_all_tasks_blocked()
+        await client.stop()
+        with anyio.fail_after(1), pytest.raises(anyio.EndOfStream):
+            await remote.receive()
+
+
 async def test_fetch_timeout(client, one_torrent):
     """
     With no peers, fetch gives up after its timeout, and the pieces are still wanted,
