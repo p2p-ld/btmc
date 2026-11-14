@@ -110,11 +110,6 @@ format.composite = [
 mypy = "mypy"
 docs = "sphinx-autobuild ./docs ./docs/_build/html"
 
-
-[tool.pdm.dev-dependencies]
-local = [
-    "-e file:///${PROJECT_ROOT}/../torrent-models#egg=torrent-models",
-]
 [tool.ruff]
 target-version = "py312"
 include = ["src/btmc/**/*.py", "tests/**/*.py", "pyproject.toml"]
