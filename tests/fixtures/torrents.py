@@ -22,6 +22,7 @@ def _make_torrent(src: Path, out: Path, flags: int, trackers: list[str]) -> Path
     out.write_bytes(lt.bencode(ct.generate()))
     return out
 
+
 @pytest.fixture(scope="session")
 def torrent_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("torrents")
@@ -45,7 +46,9 @@ def torrent_files(
         TorrentVersion.hybrid: 0,
     }
     return {
-        version: _make_torrent(test_data / "testdata", torrent_dir / f"{version}.torrent", flag, urls)
+        version: _make_torrent(
+            test_data / "testdata", torrent_dir / f"{version}.torrent", flag, urls
+        )
         for version, flag in flags.items()
     }
 
