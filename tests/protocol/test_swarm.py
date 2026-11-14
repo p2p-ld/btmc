@@ -33,8 +33,6 @@ from btmc.types import Addr, Block
 
 from ..fixtures import MakePipe
 
-pytestmark = pytest.mark.libtorrent
-
 OUR_ID = b"A" * 20
 B = 16384
 """Block size. The test torrents' pieces are two blocks."""

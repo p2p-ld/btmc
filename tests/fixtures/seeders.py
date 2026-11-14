@@ -183,6 +183,8 @@ async def seeders(
 
     Shared by the whole session, because they take a few seconds to start announcing.
     """
+    if lt is None:
+        pytest.skip("libtorrent isn't installed")
     seeders = [LtSeeder(), LtSeeder()]
     for seeder in seeders:
         for version, path in torrent_files.items():

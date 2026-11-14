@@ -21,8 +21,6 @@ from btmc.protocol.torrent import ReceivedPiece, SmartBan
 from btmc.types import Addr, Block
 from btmc.utils import torrent_name
 
-pytestmark = pytest.mark.libtorrent
-
 OUR_ID = b"A" * 20
 PEER = Addr("10.0.0.1", 1)
 OTHER = Addr("10.0.0.2", 1)
