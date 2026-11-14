@@ -1,26 +1,13 @@
 from pathlib import Path
 
 import pytest
-from torrent_models import Torrent, TorrentVersion
+from torrent_models import Torrent, TorrentCreate, TorrentVersion
+from torrent_models.create import list_files
 
 from .data import PIECE_LENGTH
 from .tracker import TrackerUrls
 
-try:
-    import libtorrent as lt
-except ImportError:
-    lt = None
-
 __all__ = ["torrent", "torrent_dir", "torrent_file", "torrent_files", "torrents", "version"]
-
-
-def _make_torrent(src: Path, out: Path, flags: int, trackers: list[str]) -> Path:
-    ct = lt.create_torrent(lt.list_files(str(src)), PIECE_LENGTH, flags)
-    for tier, url in enumerate(trackers):
-        ct.add_tracker(url, tier)
-    lt.set_piece_hashes(ct, str(src.parent))
-    out.write_bytes(lt.bencode(ct.generate()))
-    return out
 
 
 @pytest.fixture(scope="session")
@@ -33,24 +20,22 @@ def torrent_files(
     test_data: Path, tracker_urls: TrackerUrls, torrent_dir: Path
 ) -> dict[TorrentVersion, Path]:
     """
-    A .torrent file of the :func:`.test_data` for each version, made by libtorrent,
-    announcing to the :func:`.tracker`, all in one directory.
+    A .torrent file of the :func:`.test_data` for each version, made by torrent-models
+    the way libtorrent would make it, announcing to the :func:`.tracker`, all in one directory.
     Clients that use their trackers need the :func:`.tracker` to be running.
     """
-    if lt is None:
-        pytest.skip("libtorrent isn't installed")
-    urls = [tracker_urls.http, tracker_urls.udp]
-    flags = {
-        TorrentVersion.v1: lt.create_torrent.v1_only,
-        TorrentVersion.v2: lt.create_torrent.v2_only,
-        TorrentVersion.hybrid: 0,
-    }
-    return {
-        version: _make_torrent(
-            test_data / "testdata", torrent_dir / f"{version}.torrent", flag, urls
-        )
-        for version, flag in flags.items()
-    }
+    src = test_data / "testdata"
+    create = TorrentCreate(
+        paths=list_files(src),
+        path_root=src,
+        piece_length=PIECE_LENGTH,
+        trackers=[tracker_urls.http, tracker_urls.udp],
+    )
+    files = {}
+    for version in TorrentVersion:
+        files[version] = torrent_dir / f"{version}.torrent"
+        create.generate(version).write(files[version])
+    return files
 
 
 @pytest.fixture(scope="session")
