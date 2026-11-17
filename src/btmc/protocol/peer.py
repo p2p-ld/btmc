@@ -7,10 +7,10 @@ from typing import Literal, Self, TypedDict, overload
 
 import anyio
 from anyio.streams.buffered import BufferedByteStream
+from torrent_models.types.v2 import BLOCK_SIZE
 
-from btmc.exceptions import PeerError
+from btmc.exceptions import MalformedMessage, PeerError
 from btmc.protocol.messages import (
-    MAX_MESSAGE,
     Bitfield,
     BitfieldMessage,
     Cancel,
@@ -21,6 +21,7 @@ from btmc.protocol.messages import (
     KeepAlive,
     NotInterested,
     PeerMessage,
+    PeerMessageId,
     Piece,
     Request,
     Unchoke,
@@ -45,10 +46,11 @@ class CloseReason(StrEnum):
     CONNECT_FAILED = "couldn't connect"
     CONNECTION_LOST = "connection lost"
     PROTOCOL_ERROR = "broke the protocol"
+    MALFORMED_MESSAGE = "sent a malformed message"
     NO_HANDSHAKE = "no handshake"
     REQUESTS_TIMED_OUT = "requests timed out"
     IDLE = "idle"
-    BANNED = "sent bad data"
+    BANNED = "banned"
     NEEDED_ELSEWHERE = "connection needed by another torrent"
     STOPPING = "stopping"
 
@@ -56,6 +58,11 @@ class CloseReason(StrEnum):
     def penalize(self) -> bool:
         """Whether it's the peer's fault, so we wait longer before retrying it"""
         return self not in (CloseReason.NEEDED_ELSEWHERE, CloseReason.STOPPING)
+
+    @property
+    def ban(self) -> bool:
+        """Whether the peer did something no working client does, so it gets banned"""
+        return self is CloseReason.MALFORMED_MESSAGE
 
 
 type PeerEvent = Literal["message", "released", "connected", "disconnected"]
@@ -93,6 +100,8 @@ class Peer:
     and blocks we didn't ask for. So do the requests it won't answer any more,
     when it chokes us or the connection closes. :meth:`.send` queues a message,
     and :meth:`.close` ends the connection, from anywhere.
+    A message whose length is wrong for its kind closes the connection before its body is read.
+    Messages of extensions we don't speak are skipped, as if they never came.
 
     It keeps track of the handshake, whether the peer is choking us, whether we told it
     we're interested, which pieces it has, and which of our requests it hasn't answered.
@@ -224,7 +233,9 @@ class Peer:
                 async with self.shared.connections:
                     if connection is None:
                         with anyio.fail_after(self.config.connect_timeout):
-                            connection = BufferedByteStream(await anyio.connect_tcp(*self.addr))
+                            connection = BufferedByteStream(
+                                await anyio.connect_tcp(str(self.addr.ip), self.addr.port)
+                            )
                     async with anyio.create_task_group() as tg:
                         tg.start_soon(self._send_loop, connection, tg.cancel_scope)
                         tg.start_soon(self._timeout_loop)
@@ -257,13 +268,27 @@ class Peer:
                 callback(self)
             while not self.closed:
                 length = int.from_bytes(await connection.receive_exactly(4))
-                if length > MAX_MESSAGE:
-                    raise PeerError(f"message of {length} bytes is too long")
-                data = length.to_bytes(4) + await connection.receive_exactly(length)
-                msg = self._receive(PeerMessage.decode(data), anyio.current_time())
+                if length:
+                    message_id = (await connection.receive_exactly(1))[0]
+                    # checked before reading the body, so a peer can't make us hold a long one
+                    if not PeerMessage.valid_length(message_id, length - 1, self.has.n):
+                        raise MalformedMessage(f"message {message_id} has invalid length of {length} bytes")
+                    if message_id not in PeerMessageId:
+                        # an extension we don't speak: skipped without holding it, however long
+                        left = length - 1
+                        while left:
+                            left -= len(await connection.receive(min(left, BLOCK_SIZE)))
+                        continue
+                    body = await connection.receive_exactly(length - 1)
+                    received = PeerMessage.from_body(message_id, body)
+                else:
+                    received = KeepAlive()
+                msg = self._receive(received, anyio.current_time())
                 if msg is not None:
                     for message_callback in self._callbacks["message"]:
                         message_callback(self, msg)
+        except MalformedMessage as e:
+            self.close(CloseReason.MALFORMED_MESSAGE, e)
         except PeerError as e:
             self.close(CloseReason.PROTOCOL_ERROR, e)
         except PEER_ERRORS as e:
@@ -311,8 +336,8 @@ class Peer:
 
     def _receive(self, msg: PeerMessage, now: float) -> PeerMessage | None:
         """
-        A message arrived after the handshake. Returns it if it changes anything.
-        Raises PeerError if the peer broke the protocol.
+        A message arrived after the handshake, whose length was checked already.
+        Returns it if it changes anything. Raises PeerError if the peer broke the protocol.
         """
         self.received_at = now
         if isinstance(msg, KeepAlive):
@@ -332,10 +357,7 @@ class Peer:
                 self.has.add(index)
             case BitfieldMessage(bits=bits):
                 # the spec says it comes first, but like libtorrent, we take a later one too
-                try:
-                    self.has = bits.for_pieces(self.has.n)
-                except ValueError as e:
-                    raise PeerError(str(e)) from e
+                self.has = bits.for_pieces(self.has.n)
             case Piece(index=index, begin=begin, block=data):
                 block = Block(index, begin, len(data))
                 if block not in self.requests:
