@@ -11,7 +11,7 @@ from torrent_models import Torrent
 from btmc.config import Config
 from btmc.protocol.client import Client
 from btmc.protocol.torrent import TorrentState
-from btmc.types import Addr, parse_addr
+from btmc.types import AnyAddr, parse_addr
 
 
 def echo(line: str) -> None:
@@ -24,12 +24,14 @@ def echo(line: str) -> None:
 
 def _read_torrent(ctx: click.Context, param: click.Parameter, value: Path) -> Torrent[Any]:
     try:
-        return Torrent.read(value)
+        return Torrent.read(value, context={"limits": Config.from_toml().torrent_limits})
     except Exception as e:
         raise click.BadParameter(f"can't read {value}: {e}") from e
 
 
-def _parse_addrs(ctx: click.Context, param: click.Parameter, values: tuple[str, ...]) -> list[Addr]:
+def _parse_addrs(
+    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> list[AnyAddr]:
     try:
         return [parse_addr(value) for value in values]
     except ValueError as e:
@@ -70,7 +72,7 @@ def client_options(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 @contextlib.asynccontextmanager
 async def running_client(
-    torrent: Torrent[Any], dest: Path, peer: list[Addr], listen: int | None, no_trackers: bool
+    torrent: Torrent[Any], dest: Path, peer: list[AnyAddr], listen: int | None, no_trackers: bool
 ) -> AsyncGenerator[tuple[Client, TorrentState]]:
     """A running client, with the torrent added, from :func:`.torrent_options`"""
     async with Client(config=client_config(listen)) as client:
