@@ -5,7 +5,7 @@
 groups = ["default", "cli", "dev", "docs", "fsspec", "mount", "mypy", "tests"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.1"
-content_hash = "sha256:d409d7c03d1fde54679f44b848193098003af99a028e3feecea98ff604dfba2a"
+content_hash = "sha256:d88079c6c509a623cde8aff0fb12c9d7365611603367be8d74084f37dd1e87df"
 
 [[metadata.targets]]
 requires_python = ">=3.12"
@@ -159,27 +159,27 @@ files = [
 
 [[package]]
 name = "bencode-rs"
-version = "0.1.0"
-requires_python = ">=3.10"
+version = "0.2.0"
+requires_python = ">=3.11"
 summary = "a bencode parser build with pyo3"
 groups = ["default"]
 files = [
-    {file = "bencode_rs-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:e9f37983cc161820cb7e9b3462c87f630261763f8de174fe2d0dce5b5efd4fb3"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:862cec5cf476b8f7cbffef1f7be4640a7f55738434980ca47a4f7ebd82053bc4"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-manylinux2014_armv7l.manylinux_2_17_armv7l.whl", hash = "sha256:2855b31dc01cabea23ea19cbb49d58b8f3356f6a5ca7d42859d283d2b53e0c94"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-manylinux2014_ppc64le.manylinux_2_17_ppc64le.whl", hash = "sha256:891d765ebd432a305282f5ff5495913ec12bb707d8432200d91f3f3d39c4c97b"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-manylinux2014_s390x.manylinux_2_17_s390x.whl", hash = "sha256:0679f0aafbf3bd7c8b6c871d7343be387d8ac0da2502516519753c347ec8c5db"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3bf0449be93564fd261c006f4e40249ed1d4d23e331c4cf5257524ab8e8a89d2"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:246cf60c145730723f787b5365b074ddcc7f4533179f371fe6d3281048580ff4"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:fe59fecfd474111b6e4514effac2e0662205d3f0e0eaa2aa77a90789324dc707"},
-    {file = "bencode_rs-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:b7e8974e56ac3d2ab3a335f506e051e87cf9336774c94532ac1aada6a2b0d46a"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:f2cd9b9b22d503d1273ad3e26974d586e3eae211048a72accaa5f8b3376238e1"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:7353ca02cdbeaf3c931dee0b1075103e9f6bfb4fa760899fed47a6222a450e63"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c056c6b1887275c27fae33c4b8977101b43a778127bc8b80f238279761fedfe0"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:381d715900875d2547045482440a9245403882e603502b68f9c310bfeb8fd381"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:d3fc91b54ee31ee8368715f348ecd451d52d5295a225945f31009a578ee15895"},
-    {file = "bencode_rs-0.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:13bb73f6c300605956487ba6cd95e58fdf997d3063a49af8a04e3d540a103724"},
-    {file = "bencode_rs-0.1.0.tar.gz", hash = "sha256:2c760f642997491f6d3437d4269dadc0618e68a70c6217254bc8fe3d224481ed"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:4171cde14265ef615ae507c42a602f4ee34c7bf7d0ac9cbae1149202a763a391"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0e89f4e437694d813269765554149ba4813cb1d5c52ecf0db0d8db1c4755d121"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-manylinux2014_armv7l.manylinux_2_17_armv7l.whl", hash = "sha256:5a4a320ec2b308944b3c9f096623f515421a0a543de12c8cf0a6a617d86fb175"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-manylinux2014_ppc64le.manylinux_2_17_ppc64le.whl", hash = "sha256:48def7ac0f05376f651b9b5177d5899a6fd627aaa5d8d4bb0a0da53be55943ce"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-manylinux2014_s390x.manylinux_2_17_s390x.whl", hash = "sha256:572226b3756e4ee8375a01cb1af934b4f98ea63ff4256bc2598ae17adbb2d6c3"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7a05614194dd6713debafb3a7f0e8f65c4e3988eba0274d26b5d4dd3563abc93"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:c0a7e8ec1ff6adbac8f79d795d52a44a9bf3ca127fd5641297f84e19e16ac87a"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a57808a16675f1a5b60aea6371882443402fc647b0f5278039284dfd33b06830"},
+    {file = "bencode_rs-0.2.0-cp311-abi3-win_amd64.whl", hash = "sha256:4a2587d8ab0c4ff327ec08c6a6c8a8091b6a43ae404c2488e246ea4e8cdd35d4"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:6ae4d2492968cbf701be7e898fd6305e705743981ce5ad00b91acdb579960bd6"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:e8bc6bb9831beee3880f3e8c40a0e4b8291e9146ca781e55d15c296d03223f91"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a678fb51e50f6a5d20a342ef37c8ee895e0fa869d5c447eca56c4fac85052eb6"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:155e031335bb3620a95867309ed95bd5d2d162d3bea043e9c30f604c2b98b040"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:bf36d4ce074bf91b5e28233c98d0a30892522b1882d478205e69ea795a9e2b57"},
+    {file = "bencode_rs-0.2.0-cp314-cp314t-win_amd64.whl", hash = "sha256:59184a40c9b79a5b735f907c3f68b8760b63fade8f8bb0f53276d4e19918105a"},
+    {file = "bencode_rs-0.2.0.tar.gz", hash = "sha256:edcb085f689ba977e381ef8b6421e34fcac36557f57ca6ce486298e511381fa8"},
 ]
 
 [[package]]
@@ -1163,13 +1163,13 @@ files = [
 
 [[package]]
 name = "platformdirs"
-version = "4.14.5"
+version = "4.14.7"
 requires_python = ">=3.11"
 summary = "A small Python package for determining appropriate platform-specific dirs, e.g. a `user data dir`."
 groups = ["default", "dev"]
 files = [
-    {file = "platformdirs-4.14.5-py3-none-any.whl", hash = "sha256:8e778c6fa421516f4d3369449f8df3b0e1b72c0e0005fe88e3ec772d0a14e750"},
-    {file = "platformdirs-4.14.5.tar.gz", hash = "sha256:32e9921db7385aa8169bee4fe9501923e5715ba9fb7ea3b9c69b0d8e0639f7a1"},
+    {file = "platformdirs-4.14.7-py3-none-any.whl", hash = "sha256:391513b74707c42335fff3ea17eaac657a7ee9ffcadd809634d34ea594d0122c"},
+    {file = "platformdirs-4.14.7.tar.gz", hash = "sha256:5472257c1cf97a14658af52997011c7e59e4aebf3a24950b973c11b579e1b074"},
 ]
 
 [[package]]
@@ -1513,13 +1513,13 @@ files = [
 
 [[package]]
 name = "soupsieve"
-version = "4.1"
+version = "4.1.1"
 requires_python = ">=3.11.5"
 summary = "A modern CSS selector implementation for Beautiful Soup."
 groups = ["docs"]
 files = [
-    {file = "soupsieve-4.1-py3-none-any.whl", hash = "sha256:e4d667b3974ce6e038e7390486b8093369854a1d345ffdd4c121dfc4a782e809"},
-    {file = "soupsieve-4.1.tar.gz", hash = "sha256:ca9abf7126667010d8f6e9b39bfc1bc3b23c8aed9bcb0f54a754dde969bb8aab"},
+    {file = "soupsieve-4.1.1-py3-none-any.whl", hash = "sha256:8ff3422dab0b720fb667ee79864d80531a0e57994a13eb701697719ffcb751f6"},
+    {file = "soupsieve-4.1.1.tar.gz", hash = "sha256:b296bd2d2f65b1a78149f3d7bf6736a147d2c9e2dfbde0e4404639d748a02e03"},
 ]
 
 [[package]]
@@ -1698,12 +1698,12 @@ files = [
 
 [[package]]
 name = "torrent-models"
-version = "0.6.0"
+version = "0.7.1"
 requires_python = ">=3.12"
 summary = ".torrent file parsing and creation with pydantic"
 groups = ["default"]
 dependencies = [
-    "bencode-rs>=0.0.7",
+    "bencode-rs>=0.2.0",
     "humanize>=4.12.2",
     "pydantic>=2.10.6",
     "rich>=14.0.0",
@@ -1711,8 +1711,8 @@ dependencies = [
     "typing-extensions>=4.13.0; python_version < \"3.13\"",
 ]
 files = [
-    {file = "torrent_models-0.6.0-py3-none-any.whl", hash = "sha256:9453b3a9e218f9ca723efe8d63d6fd4b22dcc17cf9ba36c5258ba409dd897de1"},
-    {file = "torrent_models-0.6.0.tar.gz", hash = "sha256:f96b74e35f38ae52ebc373ca666ceaf3b965c3e7b9bda5e8d1d08e60363b91fe"},
+    {file = "torrent_models-0.7.1-py3-none-any.whl", hash = "sha256:3c169bf128952b957af03c6ab10caf67a888acc35a4bf58991a38bb2975466c2"},
+    {file = "torrent_models-0.7.1.tar.gz", hash = "sha256:2d6dfaa95ce8dc3ee3a7f0c9076bab5a9888c9657602f52ceddfb70835f94c15"},
 ]
 
 [[package]]
