@@ -1,8 +1,9 @@
 """
-The messages we send to and get from peers and trackers, with no I/O.
+The messages we send to and get from peers and trackers.
 
 - Peer messages are :class:`.Message` s, which encode themselves and decode from their bytes.
-  :meth:`.PeerMessage.decode` reads any of them.
+  :meth:`.PeerMessage.decode` reads any of them, and :meth:`.PeerMessage.valid_length`
+  says whether one is the right length for its kind, before its body is read.
 - Tracker messages are :class:`.TrackerMessage` s. The same message can go over HTTP or UDP,
   so each has ``to_http``/``from_http`` and ``to_udp``/``from_udp`` for the ways it's sent.
   :func:`.decode_udp` and :func:`.decode_http` read whole UDP packets and HTTP responses,
@@ -17,7 +18,7 @@ from __future__ import annotations
 import ipaddress
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from math import ceil
@@ -25,15 +26,19 @@ from typing import Any, ClassVar, Self
 from urllib.parse import quote_from_bytes
 
 import bencode_rs
+from torrent_models.types.v2 import BLOCK_SIZE
 
-from btmc.exceptions import PeerError, TrackerError
-from btmc.types import Addr, BlockLength, BlockOffset, PieceIndex
+from btmc.exceptions import MalformedMessage, PeerError, TrackerError
+from btmc.types import Addr, AnyAddr, BlockLength, BlockOffset, PieceIndex, parse_addr
 
 PROTOCOL = b"BitTorrent protocol"
 UDP_MAGIC = 0x41727101980
 """The connection id of a UDP tracker connect request (BEP 15)"""
-MAX_MESSAGE = 1 << 21
-"""Longest peer message we accept. Blocks are 16 KiB, but bitfields of big torrents are longer."""
+MAX_BENCODE_DEPTH = 100
+"""
+How deeply lists and dicts can nest in bencode from strangers, like libtorrent's limit.
+Decoding deeper nesting overflows the stack and crashes the process.
+"""
 
 type UDPRequest = Connect | AnnounceRequest
 """What we send to UDP trackers"""
@@ -112,8 +117,8 @@ class PeerMessage(Message):
     A message on a peer connection after the handshake: a 4-byte length,
     then a 1-byte id and a body. A keepalive is just a length of 0.
 
-    Messages fill in their body with :meth:`._encode_body` and :meth:`._decode_body`.
-    Messages without a body don't need to.
+    Messages fill in their body with :meth:`._encode_body` and :meth:`._decode_body`,
+    and say how long it can be with :meth:`._valid_length`. Messages without a body don't need to.
     """
 
     id: ClassVar[int | None]
@@ -125,22 +130,46 @@ class PeerMessage(Message):
 
     @classmethod
     def decode(cls, data: bytes) -> Self:
+        """
+        A whole message from its bytes. Messages of extensions we don't speak are :class:`.Unknown`.
+        On a subclass, raises PeerError if it's another kind of message.
+        """
         if len(data) < 4 or len(data) != 4 + int.from_bytes(data[:4]):
             raise PeerError("peer message's length doesn't match its length prefix")
-        msg: PeerMessage
-        if len(data) == 4:
-            msg = KeepAlive()
-        elif data[4] not in _PEER_MESSAGES:
-            msg = Unknown(data[4], data[5:])
-        else:
-            kind = _PEER_MESSAGES[data[4]]
-            try:
-                msg = kind._decode_body(data[5:])
-            except (struct.error, ValueError) as e:
-                raise PeerError(f"malformed {kind.__name__} message") from e
+        msg = KeepAlive() if len(data) == 4 else PeerMessage.from_body(data[4], data[5:])
         if not isinstance(msg, cls):
             raise PeerError(f"expected a {cls.__name__} message, got {type(msg).__name__}")
         return msg
+
+    @staticmethod
+    def from_body(message_id: int, body: bytes) -> PeerMessage:
+        """
+        A message from its id and body, the parts after the length prefix,
+        for when they were read separately. Messages of extensions we don't speak are
+        :class:`.Unknown`.
+        """
+        kind = _PEER_MESSAGES.get(message_id)
+        if kind is None:
+            return Unknown(message_id, body)
+        try:
+            return kind._decode_body(body)
+        except (struct.error, ValueError) as e:
+            raise MalformedMessage(f"malformed {kind.__name__} message") from e
+
+    @staticmethod
+    def valid_length(message_id: int, body_length: int, n_pieces: int) -> bool:
+        """
+        Whether a body this long is right for the kind of message with this id,
+        in a torrent with this many pieces, so a malformed message can be refused
+        before its body is read. Messages of extensions we don't speak can be any length.
+        """
+        kind = _PEER_MESSAGES.get(message_id)
+        return kind is None or kind._valid_length(body_length, n_pieces)
+
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        """See :meth:`.valid_length`"""
+        return body_length == 0
 
     def _encode_body(self) -> bytes:
         return b""
@@ -181,6 +210,10 @@ class Have(PeerMessage):
 
     id = PeerMessageId.HAVE
 
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        return body_length == 4
+
     def _encode_body(self) -> bytes:
         return struct.pack(">I", self.index)
 
@@ -199,6 +232,10 @@ class BitfieldMessage(PeerMessage):
 
     id = PeerMessageId.BITFIELD
 
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        return body_length == ceil(n_pieces / 8)
+
     def _encode_body(self) -> bytes:
         return bytes(self.bits.bits)
 
@@ -215,6 +252,10 @@ class Request(PeerMessage):
 
     id = PeerMessageId.REQUEST
 
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        return body_length == 12
+
     def _encode_body(self) -> bytes:
         return struct.pack(">III", self.index, self.begin, self.length)
 
@@ -230,6 +271,10 @@ class Cancel(PeerMessage):
     length: BlockLength
 
     id = PeerMessageId.CANCEL
+
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        return body_length == 12
 
     def _encode_body(self) -> bytes:
         return struct.pack(">III", self.index, self.begin, self.length)
@@ -248,6 +293,11 @@ class Piece(PeerMessage):
     block: bytes
 
     id = PeerMessageId.PIECE
+
+    @classmethod
+    def _valid_length(cls, body_length: int, n_pieces: int) -> bool:
+        # the index and offset, then at most one block
+        return 8 <= body_length <= 8 + BLOCK_SIZE
 
     def _encode_body(self) -> bytes:
         return struct.pack(">II", self.index, self.begin) + self.block
@@ -444,20 +494,27 @@ class AnnounceRequest(TrackerMessage):
 class AnnounceResponse(TrackerMessage):
     interval: int | None
     """Seconds to wait before announcing again, if the tracker said"""
-    peers: list[Addr]
+    peers: Sequence[AnyAddr]
 
     action = TrackerAction.ANNOUNCE
 
     @classmethod
     def from_http(cls, value: dict[bytes, Any]) -> Self:
-        interval = value.get(b"interval")
-        return cls(None if interval is None else int(interval), _http_peers(value))
+        """See :func:`.decode_http`. The interval can be any number, for the caller to clamp."""
+        match value.get(b"interval"):
+            case None:
+                interval = None
+            case int(interval):
+                pass
+            case _:
+                raise TrackerError("tracker's interval isn't a number")
+        return cls(interval, _http_peers(value))
 
     @classmethod
     def from_udp(cls, body: bytes, ipv6: bool) -> Self:
         """UDP trackers send IPv6 peers when we announced over IPv6"""
-        (interval,) = struct.unpack(">I", body[:4])
-        # then leechers and seeders, which we don't use
+        # leechers and seeders, which we don't use, come after the interval
+        interval, _, _ = struct.unpack(">III", body[:12])
         return cls(interval, _decode_peers(body[12:], 18 if ipv6 else 6))
 
 
@@ -471,7 +528,10 @@ class TrackerFailure(TrackerMessage):
 
     @classmethod
     def from_http(cls, value: dict[bytes, Any]) -> Self:
-        return cls(bytes(value[b"failure reason"]).decode(errors="replace"))
+        match value[b"failure reason"]:
+            case bytes(reason):
+                return cls(reason.decode(errors="replace"))
+        raise TrackerError("tracker's failure reason isn't a string")
 
     @classmethod
     def from_udp(cls, body: bytes, ipv6: bool) -> Self:
@@ -506,47 +566,69 @@ _UDP_RESPONSES: dict[int, type[UDPResponse]] = {
 
 
 def decode_http(data: bytes) -> HTTPResponse:
-    """A response from an HTTP tracker"""
+    """
+    A response from an HTTP tracker. Raises TrackerError if it isn't a dict,
+    or its failure reason or interval is the wrong type. Peers that can't be read are left out.
+    """
     try:
-        value = bencode_rs.bdecode_relax(data)
+        value = bencode_rs.bdecode_relax(data, max_depth=MAX_BENCODE_DEPTH)
     except bencode_rs.BencodeDecodeError as e:
         raise TrackerError(f"can't decode tracker response: {e}") from e
     if not isinstance(value, dict):
         raise TrackerError("tracker response isn't a dict")
-    try:
-        if b"failure reason" in value:
-            return TrackerFailure.from_http(value)
-        return AnnounceResponse.from_http(value)
-    except (TypeError, ValueError, AttributeError) as e:
-        raise TrackerError(f"malformed tracker response: {e!r}") from e
+    if b"failure reason" in value:
+        return TrackerFailure.from_http(value)
+    return AnnounceResponse.from_http(value)
 
 
 def _decode_peers(data: bytes, size: int) -> list[Addr]:
-    """Compact peers: 4 or 16 bytes of IP and 2 of port per peer"""
+    """Compact peers: 4 or 16 bytes of IP and 2 of port per peer. Port 0 isn't an address."""
     peers = []
     for i in range(0, len(data) - len(data) % size, size):
         ip = ipaddress.ip_address(data[i : i + size - 2])
         port = int.from_bytes(data[i + size - 2 : i + size])
         if port:
-            peers.append(Addr(str(ip), port))
+            peers.append(Addr(ip, port))
     return peers
 
 
-def _http_peers(value: dict[bytes, Any]) -> list[Addr]:
+def _http_peers(value: dict[bytes, Any]) -> list[AnyAddr]:
     """
-    The peers in an HTTP tracker's response: IPv4 in ``peers``, compact or as the list of dicts
-    sent by trackers that ignore ``compact=1``, and IPv6 in ``peers6``, always compact
+    The peers in an HTTP tracker's response: in ``peers``, compact IPv4 or the list of dicts
+    sent by trackers that ignore ``compact=1``, and in ``peers6``, compact IPv6 (BEP 7).
+    Like libtorrent, a key of the wrong type has no peers, rather than failing the response.
     """
-    peers = value.get(b"peers", b"")
-    if isinstance(peers, list):
-        ipv4 = [
-            Addr(p[b"ip"].decode(errors="replace"), int(p[b"port"]))
-            for p in peers
-            if b"ip" in p and b"port" in p
-        ]
-    else:
-        ipv4 = _decode_peers(peers, 6)
-    return ipv4 + _decode_peers(value.get(b"peers6", b""), 18)
+    peers: list[AnyAddr] = []
+    match value.get(b"peers"):
+        case bytes(compact):
+            peers += _decode_peers(compact, 6)
+        case list(dicts):
+            peers += _dict_peers(dicts)
+    match value.get(b"peers6"):
+        case bytes(compact6):
+            peers += _decode_peers(compact6, 18)
+    return peers
+
+
+def _dict_peers(dicts: list[Any]) -> list[AnyAddr]:
+    """
+    Peers from the list of dicts in an HTTP tracker's response. The ``ip`` can be a host name.
+    Entries whose ``ip`` and ``port`` aren't an address aren't peers.
+    Their ``peer id`` isn't kept: we'd only use it to skip ourselves, which the handshake does.
+    """
+    peers = []
+    for entry in dicts:
+        if not isinstance(entry, dict):
+            continue
+        host, port = entry.get(b"ip"), entry.get(b"port")
+        if not isinstance(host, bytes) or not isinstance(port, int):
+            continue
+        try:
+            # UnicodeDecodeError is a ValueError too
+            peers.append(parse_addr((host.decode(), port)))
+        except ValueError:
+            continue
+    return peers
 
 
 def _udp_header(connection_id: int, action: TrackerAction, transaction_id: int) -> bytes:
