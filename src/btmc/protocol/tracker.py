@@ -1,7 +1,7 @@
 """Announcing to trackers, one call at a time"""
 
 import contextlib
-import random
+import secrets
 import socket
 from urllib.parse import urlsplit
 
@@ -21,14 +21,36 @@ from btmc.protocol.messages import (
     decode_http,
     decode_udp,
 )
+from btmc.types import parse_addr
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+"""Ports of trackers whose url doesn't say. UDP tracker urls have to."""
+
+
+def check_url(url: str) -> None:
+    """
+    Raise TrackerError if a tracker url is one we can't announce to:
+    not HTTP(S) or UDP, with spaces or control characters, or without a valid host and port.
+    Like libtorrent's ``is_valid_tracker_url``.
+    """
+    if any(c <= " " or c == "\x7f" for c in url):
+        raise TrackerError("url has spaces or control characters")
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https", "udp"):
+            raise TrackerError("only HTTP and UDP trackers are supported")
+        port = _DEFAULT_PORTS.get(parts.scheme, 0) if parts.port is None else parts.port
+        parse_addr((parts.hostname or "", port))
+    except ValueError as e:
+        raise TrackerError(f"bad tracker url: {e}") from e
 
 
 async def announce(
     url: str,
     request: AnnounceRequest,
     *,
+    config: Config,
     http: httpx.AsyncClient | None = None,
-    config: Config | None = None,
 ) -> AnnounceResponse:
     """
     Announce to an HTTP(S) or UDP tracker.
@@ -41,19 +63,17 @@ async def announce(
     Args:
         url: the tracker's announce url
         request: what to announce
-        http: an HTTP client to reuse between announces. Without one, each announce makes its own.
         config: the timeout
+        http: an HTTP client to reuse between announces. Without one, each announce makes its own.
     """
-    config = config or Config()
+    check_url(url)
     try:
         with anyio.fail_after(config.announce_timeout):
             if url.startswith("udp://"):
                 return await _udp_announce(url, request)
-            if url.startswith(("http://", "https://")):
-                return await _http_announce(url, request, http)
+            return await _http_announce(url, request, http)
     except (httpx.HTTPError, OSError) as e:
         raise TrackerError(f"announce to {url} failed: {e!r}") from e
-    raise TrackerError(f"can't announce to {url}, only HTTP and UDP trackers are supported")
 
 
 async def _http_announce(
@@ -65,7 +85,9 @@ async def _http_announce(
             http = await stack.enter_async_context(httpx.AsyncClient())
         # the whole announce has one timeout, in announce
         response = await http.get(f"{url}{sep}{request.to_http()}", timeout=None)
-        response.raise_for_status()
+    # like libtorrent, nothing but a 200 counts as an answer
+    if response.status_code != 200:
+        raise TrackerError(f"tracker answered with HTTP {response.status_code}")
     match decode_http(response.content):
         case TrackerFailure(reason=reason):
             raise TrackerRefused(reason)
@@ -74,15 +96,14 @@ async def _http_announce(
 
 
 async def _udp_announce(url: str, request: AnnounceRequest) -> AnnounceResponse:
-    """BEP 15"""
+    """BEP 15, for a url :func:`.check_url` passed, so it has a host and port"""
     parts = urlsplit(url)
-    if not parts.hostname or not parts.port:
-        raise TrackerError(f"bad UDP tracker url {url}")
+    assert parts.hostname is not None and parts.port is not None
     async with await anyio.create_connected_udp_socket(parts.hostname, parts.port) as sock:
         ipv6 = sock.extra(SocketAttribute.family) == socket.AF_INET6
-        txid = random.getrandbits(32)
+        txid = secrets.randbits(32)
         connected = await _udp_call(sock, txid, Connect().to_udp(txid), Connected, ipv6)
-        txid = random.getrandbits(32)
+        txid = secrets.randbits(32)
         packet = request.to_udp(connected.connection_id, txid)
         return await _udp_call(sock, txid, packet, AnnounceResponse, ipv6)
 
@@ -91,17 +112,21 @@ async def _udp_call[R: UDPResponse](
     sock: ConnectedUDPSocket, transaction_id: int, packet: bytes, expect: type[R], ipv6: bool
 ) -> R:
     """
-    Send a request once, and wait for its answer, skipping packets for other transactions.
+    Send a request once, and wait for its answer. Packets that are malformed,
+    for other transactions, or of the wrong kind are skipped, since anyone can send
+    a UDP packet that looks like it's from the tracker.
     FIXME: Waits forever if no answer comes, so it must be called under a timeout,
     like the one around the whole announce in :func:`.announce`.
     """
     await sock.send(packet)
     while True:
-        answered, response = decode_udp(await sock.receive(), ipv6)
+        try:
+            answered, response = decode_udp(await sock.receive(), ipv6)
+        except TrackerError:
+            continue
         if answered != transaction_id:
             continue
         if isinstance(response, TrackerFailure):
             raise TrackerRefused(response.reason)
-        if not isinstance(response, expect):
-            raise TrackerError(f"expected {expect.__name__}, got {type(response).__name__}")
-        return response
+        if isinstance(response, expect):
+            return response
