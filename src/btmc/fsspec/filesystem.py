@@ -34,7 +34,7 @@ from btmc.files.zip import TorrentZip, ZipMember
 from btmc.fsspec.registry import TorrentRegistry
 from btmc.protocol.client import Client
 from btmc.protocol.torrent import TorrentState
-from btmc.types import PieceIndex, parse_addr
+from btmc.types import Addr, PieceIndex, parse_addr
 from btmc.utils import torrent_name
 
 log = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ class TorrentFileSystem(AsyncFileSystem):
         torrents: Sequence[Torrent[Any] | Path | str] = (),
         zips: Sequence[str] = (),
         trackers: list[list[str]] | None = None,
-        peers: Sequence[str | Sequence[Any]] = (),
+        peers: Sequence[Addr | str | Sequence[Any]] = (),
         config: Config | dict[str, Any] | None = None,
         **kwargs: Any,
     ):

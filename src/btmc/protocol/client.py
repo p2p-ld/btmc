@@ -9,7 +9,7 @@ from typing import Any, Literal, cast
 
 import anyio
 import httpx
-from anyio.abc import SocketAttribute, SocketStream, TaskGroup
+from anyio.abc import IPSockAddrType, SocketAttribute, SocketStream, TaskGroup
 from anyio.streams.buffered import BufferedByteStream
 from torrent_models import Torrent
 
@@ -291,7 +291,8 @@ class Client:
             with anyio.fail_after(self.config.handshake_timeout):
                 handshake = Handshake.decode(await connection.receive_exactly(Handshake.LENGTH))
             t = self.get(handshake.info_hash)
-            addr = cast(Addr, stream.extra(SocketAttribute.remote_address)[:2])
+            remote = cast(IPSockAddrType, stream.extra(SocketAttribute.remote_address))
+            addr = Addr(remote[0], remote[1])
             accepted = t is not None and t.accept_connection(connection, addr, handshake)
         except PEER_ERRORS:
             pass
