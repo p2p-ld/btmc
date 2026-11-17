@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import ipaddress
 import os
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -18,7 +19,7 @@ from btmc.protocol.messages import Bitfield, Handshake
 from btmc.protocol.peer import PEER_ERRORS
 from btmc.protocol.shared import Shared
 from btmc.protocol.torrent import TorrentState
-from btmc.types import Addr, PieceIndex
+from btmc.types import Addr, AnyAddr, PieceIndex
 from btmc.utils import torrent_name, wire_hash
 
 PEER_ID_PREFIX = b"-SC0001-"
@@ -196,7 +197,7 @@ class Client:
         root: Path | None = None,
         *,
         trackers: list[list[str]] | None = None,
-        known_peers: Sequence[Addr] = (),
+        known_peers: Sequence[AnyAddr] = (),
     ) -> TorrentState:
         """
         Add a torrent and start fetching from it, or get it if it's already been added.
@@ -206,7 +207,7 @@ class Client:
             root: download directory, defaults to a directory named by its info hash
                 in the config's :attr:`.Config.download_dir`
             trackers: tracker tiers to use instead of the torrent's own
-            known_peers: peers to connect to without asking a tracker
+            known_peers: peers to connect to without asking a tracker. Host names are looked up.
         """
         if not self.running:
             raise RuntimeError("the client isn't running")
@@ -284,15 +285,21 @@ class Client:
     # ---- incoming connections ----
 
     async def _incoming(self, stream: SocketStream) -> None:
-        """Read an incoming connection's handshake, and hand it to its torrent"""
+        """
+        Read an incoming connection's handshake, and hand it to its torrent.
+        Connections from blocked addresses are closed without reading anything.
+        """
+        assert self._shared is not None
         connection = BufferedByteStream(stream)
         accepted = False
         try:
+            remote = cast(IPSockAddrType, stream.extra(SocketAttribute.remote_address))
+            addr = Addr(ipaddress.ip_address(remote[0]), remote[1])
+            if self._shared.is_blocked(addr):
+                return
             with anyio.fail_after(self.config.handshake_timeout):
                 handshake = Handshake.decode(await connection.receive_exactly(Handshake.LENGTH))
             t = self.get(handshake.info_hash)
-            remote = cast(IPSockAddrType, stream.extra(SocketAttribute.remote_address))
-            addr = Addr(remote[0], remote[1])
             accepted = t is not None and t.accept_connection(connection, addr, handshake)
         except PEER_ERRORS:
             pass
