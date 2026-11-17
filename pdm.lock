@@ -5,7 +5,7 @@
 groups = ["default", "cli", "dev", "docs", "fsspec", "mount", "mypy", "tests"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.1"
-content_hash = "sha256:005539b258e18e144eb1f944a6f31ddeb07c60440516fa19bdf2c4113a66bcee"
+content_hash = "sha256:d409d7c03d1fde54679f44b848193098003af99a028e3feecea98ff604dfba2a"
 
 [[metadata.targets]]
 requires_python = ">=3.12"
