@@ -13,7 +13,7 @@ from torrent_models import Torrent
 
 from btmc.cli.common import client_config, client_options, torrent_argument
 from btmc.cli.progress import TorrentProgress
-from btmc.types import Addr
+from btmc.types import AnyAddr
 from btmc.utils import torrent_name
 
 
@@ -58,7 +58,7 @@ def mount(
     download_dir: Path | None,
     fetch: str,
     clear_cache: bool,
-    peer: list[Addr],
+    peer: list[AnyAddr],
     listen: int | None,
     no_trackers: bool,
 ) -> None:
@@ -92,9 +92,13 @@ def mount(
     if download_dir is not None:
         config = dataclasses.replace(config, download_dir=download_dir.expanduser())
     dest = config.download_dir / torrent_name(torrent)
-    if clear_cache and dest.exists():
-        shutil.rmtree(dest)
-        console.print(f"cleared {dest}", markup=False)
+    if clear_cache:
+        # the torrent's resume files too, including ones for other directories,
+        # which only means those get checked again
+        for path in (dest, config.state_dir / "resume" / torrent_name(torrent)):
+            if path.exists():
+                shutil.rmtree(path)
+                console.print(f"cleared {path}", markup=False)
     fs = TorrentFileSystem(
         torrents=[torrent],
         zips=["*.zip", *(glob.escape(path) for path in zips)],

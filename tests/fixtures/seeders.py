@@ -41,7 +41,7 @@ class LtSeeder:
 
     def __init__(self):
         self.port = free_port()
-        self.addr = Addr("127.0.0.1", self.port)
+        self.addr = Addr.parse("127.0.0.1", self.port)
         self.ses = lt.session(
             {
                 "listen_interfaces": f"127.0.0.1:{self.port}",
@@ -71,6 +71,9 @@ class LtSeeder:
 
     def close(self) -> None:
         for h in self.handles.values():
+            # Without trackers, removing a torrent doesn't announce that it stopped.
+            # Those announces would reach the tracker while it shuts down, and leak.
+            h.replace_trackers([])
             self.ses.remove_torrent(h)
         self.ses.pause()
 
@@ -122,7 +125,7 @@ class FakeSeeder:
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
         self.port = self._server.sockets[0].getsockname()[1]
-        self.addr = Addr("127.0.0.1", self.port)
+        self.addr = Addr.parse("127.0.0.1", self.port)
 
     async def stop(self) -> None:
         self._server.close()

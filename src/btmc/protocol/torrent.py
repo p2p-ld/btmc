@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import os
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,10 +17,10 @@ from torrent_models import Torrent
 
 from btmc.protocol.messages import Bitfield, Handshake
 from btmc.protocol.picker import PiecePicker, PieceState
-from btmc.protocol.shared import Shared
+from btmc.protocol.shared import BanReason, Shared
 from btmc.protocol.swarm import Swarm
 from btmc.storage import PieceStore
-from btmc.types import Addr, Block, BlockOffset, PieceIndex
+from btmc.types import Addr, AnyAddr, Block, BlockOffset, PieceIndex
 from btmc.utils import torrent_name
 
 log = logging.getLogger(__name__)
@@ -35,8 +36,10 @@ class TorrentState:
     and writes the good ones to its :class:`.PieceStore`. When a piece fails,
     its :class:`.SmartBan` works out who sent bad data, and they're banned.
 
-    If there's no resume file saying which pieces we have, whatever is already on disk,
-    like files from another client, is checked before anything is fetched.
+    Which pieces we have is saved in a resume file in :attr:`.Config.state_dir`,
+    one for each directory the torrent is fetched into.
+    If there's no resume file, whatever is already on disk, like files from another client,
+    is checked before anything is fetched.
 
     Args:
         torrent: the torrent
@@ -53,14 +56,16 @@ class TorrentState:
         shared: Shared,
         *,
         trackers: list[list[str]] | None = None,
-        known_peers: Sequence[Addr] = (),
+        known_peers: Sequence[AnyAddr] = (),
     ):
         self.torrent = torrent
         self.layout = torrent.layout
         self.n_pieces = self.layout.n_pieces
         self.name = torrent_name(torrent)
         self.shared = shared
-        self.store = PieceStore(root, self.n_pieces, self.name)
+        root_key = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()[:16]
+        resume_path = shared.config.state_dir / "resume" / self.name / f"{root_key}.have"
+        self.store = PieceStore(root, self.n_pieces, resume_path)
         self.smart_ban = SmartBan()
         self._blocks: dict[PieceIndex, dict[BlockOffset, tuple[bytes, Addr]]] = {}
         """The blocks of pieces being downloaded or waiting to be checked, and who sent them"""
@@ -218,7 +223,7 @@ class TorrentState:
         before a failed piece is fetched again
         """
         for addr in self.smart_ban.checked(piece, ok):
-            self.shared.ban(addr)
+            self.shared.ban(addr, BanReason.BAD_DATA)
         if ok:
             self.downloaded += sum(len(block) for block in piece.data())
             self.picker.passed(piece.index)
