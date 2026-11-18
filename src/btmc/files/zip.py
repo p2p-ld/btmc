@@ -19,6 +19,14 @@ from btmc.types import PieceIndex
 _LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
 """The header before each member's data, ending with the lengths of its name and extra field"""
 _LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
+_UTF8_NAME = 1 << 11
+"""Flag bit saying a member's name is UTF-8, rather than cp437"""
+_UNSUPPORTED_FLAGS = {
+    1 << 0: "encryption",
+    1 << 5: "compressed patched data",
+    1 << 6: "strong encryption",
+}
+"""Flag bits of features :mod:`zipfile` can't read, or we can't without a password"""
 
 
 class TorrentZip:
@@ -102,8 +110,9 @@ class TorrentZip:
         so reading one would wait while another waits for pieces.
         """
         info = (await self.open()).getinfo(name)
+        _, end = self._ranges[name]
         reader = _BlockingReader(self.client, self.torrent, self.path)
-        return await anyio.to_thread.run_sync(_member_file, reader, info)
+        return await anyio.to_thread.run_sync(_member_file, reader, info, end)
 
     @staticmethod
     def _member_ranges(zf: zipfile.ZipFile) -> dict[str, tuple[int, int]]:
@@ -111,11 +120,13 @@ class TorrentZip:
         Byte range of each member: its local header, name, extra field, and data.
 
         The local extra field can be a different length than the one in the central directory,
-        so we can't compute the exact end, but it has to end before the next member starts.
+        so we can't compute the exact end, but it has to end before the next member starts,
+        or the central directory for the last one. Members that share a local header
+        share its range. A name that's in the zip twice is the later one, like in zipfile.
         """
-        infos = sorted(zf.infolist(), key=lambda i: i.header_offset)
-        ends = [i.header_offset for i in infos[1:]] + [zf.start_dir]
-        return {i.filename: (i.header_offset, end) for i, end in zip(infos, ends)}
+        offsets = sorted({i.header_offset for i in zf.infolist()})
+        ends = dict(zip(offsets, [*offsets[1:], zf.start_dir], strict=True))
+        return {i.filename: (i.header_offset, ends[i.header_offset]) for i in zf.infolist()}
 
 
 class ZipMember:
@@ -179,16 +190,34 @@ class _BlockingReader(io.RawIOBase):
         return len(data)
 
 
-def _member_file(reader: "_BlockingReader", info: zipfile.ZipInfo) -> zipfile.ZipExtFile:
-    """Like :meth:`zipfile.ZipFile.open`, but reading through ``reader``"""
+def _member_file(reader: "_BlockingReader", info: zipfile.ZipInfo, end: int) -> zipfile.ZipExtFile:
+    """
+    Like :meth:`zipfile.ZipFile.open`, but reading through ``reader``, with its checks:
+    the member's local header has to have its name, and its data has to end by ``end``,
+    where the next member starts, so members can't overlap like they do in zip bombs.
+    Raises BadZipFile if they don't, and NotImplementedError for a member that's encrypted
+    or uses a feature zipfile can't read.
+    """
+    for flag, feature in _UNSUPPORTED_FLAGS.items():
+        if info.flag_bits & flag:
+            raise NotImplementedError(f"{info.filename} uses {feature}, which isn't supported")
     reader.seek(info.header_offset)
     header = reader.read(_LOCAL_HEADER.size)
     if len(header) != _LOCAL_HEADER.size:
         raise zipfile.BadZipFile(f"truncated header for {info.filename}")
-    signature, *_, name_length, extra_length = _LOCAL_HEADER.unpack(header)
+    signature, _, _, flags, *_, name_length, extra_length = _LOCAL_HEADER.unpack(header)
     if signature != _LOCAL_HEADER_SIGNATURE:
         raise zipfile.BadZipFile(f"bad header for {info.filename}")
-    reader.seek(name_length + extra_length, io.SEEK_CUR)
+    name = reader.read(name_length)
+    try:
+        matches = name.decode("utf-8" if flags & _UTF8_NAME else "cp437") == info.orig_filename
+    except UnicodeDecodeError:
+        matches = False
+    if not matches:
+        raise zipfile.BadZipFile(f"{info.filename}'s header has another name, {name!r}")
+    reader.seek(extra_length, io.SEEK_CUR)
+    if reader.tell() + info.compress_size > end:
+        raise zipfile.BadZipFile(f"{info.filename} overlaps the next member")
     return zipfile.ZipExtFile(reader, "r", info, close_fileobj=True)
 
 

@@ -1,3 +1,5 @@
+import io
+import struct
 import zipfile
 from types import SimpleNamespace
 
@@ -8,9 +10,11 @@ from btmc import TorrentZip
 
 from ..fixtures import ZIP_MEMBERS
 
-pytestmark = pytest.mark.libtorrent
+CRAFTED_MEMBERS = {"a.txt": b"a" * 1000, "b.txt": b"b" * 1000, "ünï.txt": b"u" * 10}
+"""Members of the zips that are edited byte by byte to test the checks on reading them"""
 
 
+@pytest.mark.libtorrent
 async def test_zip_members(client, seeded, test_data):
     """We can list and read the members of a zip in a torrent"""
     tzip = TorrentZip(client, seeded, "archive.zip")
@@ -20,6 +24,7 @@ async def test_zip_members(client, seeded, test_data):
             assert await tzip.read(name) == source.read(name), name
 
 
+@pytest.mark.libtorrent
 async def test_zip_lines(client, seeded, test_data):
     """We can read the lines of a member of a zip in a torrent in batches"""
     tzip = TorrentZip(client, seeded, "archive.zip")
@@ -40,6 +45,7 @@ async def test_zip_cancel_while_fetching(client, one_torrent):
     assert one_torrent.have.count() == 0
 
 
+@pytest.mark.libtorrent
 async def test_zip_fetches_only_what_it_needs(client, seeded):
     """Reading a small member only fetches the zip's index and the member's pieces"""
     tzip = TorrentZip(client, seeded, "archive.zip")
@@ -91,3 +97,71 @@ async def test_zip_members_read_independently(torrent, test_data):
     finally:
         waiting.close()
         other.close()
+
+
+async def read_member(data: bytes, name: str) -> bytes:
+    """A member of a zip in memory, read the way a mounted torrent reads it"""
+    # holding back nothing
+    client = _HeldClient(data, (0, 0))
+    t = SimpleNamespace(layout=SimpleNamespace(file=lambda path: SimpleNamespace(length=len(data))))
+    tzip = TorrentZip(client, t, "test.zip")  # type: ignore[arg-type]
+    member = await tzip.open_member(name)
+    try:
+        return await member.read(0, 1 << 20)
+    finally:
+        member.close()
+
+
+def make_zip(compression: int = zipfile.ZIP_STORED) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression) as zf:
+        for name, content in CRAFTED_MEMBERS.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def central_entry(data: bytes | bytearray, name: str) -> int:
+    """Where a member's entry in the central directory starts. Its name comes 46 bytes in."""
+    return data.index(name.encode(), data.index(b"PK\x01\x02")) - 46
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+@pytest.mark.validation
+async def test_crafted_members_read(compression):
+    data = make_zip(compression)
+    for name, content in CRAFTED_MEMBERS.items():
+        assert await read_member(data, name) == content
+
+
+@pytest.mark.validation
+async def test_header_with_another_name():
+    """A local header has to have the name the central directory gives the member"""
+    data = bytearray(make_zip())
+    offset = data.index(b"b.txt")
+    data[offset : offset + 5] = b"c.txt"
+    with pytest.raises(zipfile.BadZipFile, match="another name"):
+        await read_member(bytes(data), "b.txt")
+
+
+@pytest.mark.validation
+async def test_overlapping_members():
+    """A member whose data runs into the next one's is refused, as in overlapping zip bombs"""
+    data = bytearray(make_zip())
+    entry = central_entry(data, "a.txt")
+    size = struct.unpack_from("<L", data, entry + 20)[0]
+    struct.pack_into("<L", data, entry + 20, size + 1)
+    with pytest.raises(zipfile.BadZipFile, match="overlaps"):
+        await read_member(bytes(data), "a.txt")
+    assert await read_member(bytes(data), "b.txt") == CRAFTED_MEMBERS["b.txt"]
+
+
+@pytest.mark.parametrize("flag", [1 << 0, 1 << 5, 1 << 6])
+@pytest.mark.validation
+async def test_unsupported_members(flag):
+    """Members that are encrypted, or use features zipfile can't read, are refused"""
+    data = bytearray(make_zip())
+    entry = central_entry(data, "a.txt")
+    flags = struct.unpack_from("<H", data, entry + 8)[0]
+    struct.pack_into("<H", data, entry + 8, flags | flag)
+    with pytest.raises(NotImplementedError):
+        await read_member(bytes(data), "a.txt")
