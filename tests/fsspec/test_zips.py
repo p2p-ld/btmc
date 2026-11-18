@@ -135,6 +135,7 @@ async def test_errors(torrent_fs):
 
 
 @pytest.mark.filterwarnings("ignore:Duplicate name")
+@pytest.mark.confinement
 def test_tree_from_zip_leaves_out_unsafe_and_clashing_names():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

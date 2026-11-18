@@ -44,6 +44,7 @@ def test_paths_from_toml(tmp_path: Path):
     assert config.state_dir == Path.home() / "state"
 
 
+@pytest.mark.network_policy
 def test_ip_blocklist(tmp_path: Path):
     """Networks come from TOML as strings, and setting them replaces the defaults"""
     assert Config().ip_blocklist == [ip_network(net) for net in DEFAULT_IP_BLOCKLIST]
@@ -54,6 +55,7 @@ def test_ip_blocklist(tmp_path: Path):
         Config(ip_blocklist=["10.0.0.1/8"])  # type: ignore[list-item]
 
 
+@pytest.mark.limits
 def test_torrent_limits(tmp_path: Path):
     """Limits default to libtorrent's, and each one in the TOML table replaces its default"""
     assert Config().torrent_limits == LoadLimits.libtorrent()

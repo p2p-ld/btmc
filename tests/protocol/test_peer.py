@@ -192,6 +192,7 @@ async def test_closed_before_running(peers: Peers):
     ],
     ids=["other info hash", "ourselves", "not bittorrent"],
 )
+@pytest.mark.validation
 async def test_protocol_error_ends_run(peers: Peers, data: bytes):
     peer, remote = peers.linked()
     await remote.send(data)
@@ -222,6 +223,7 @@ async def test_protocol_error_ends_run(peers: Peers, data: bytes):
         "huge choke",
     ],
 )
+@pytest.mark.validation
 async def test_malformed_message_ends_run(peers: Peers, data: bytes):
     """A message of the wrong length for its kind closes the connection before its body is read"""
     peer, remote = peers.linked()
@@ -232,6 +234,7 @@ async def test_malformed_message_ends_run(peers: Peers, data: bytes):
     assert isinstance(peer.close_error, MalformedMessage)
 
 
+@pytest.mark.limits
 async def test_unknown_messages_are_skipped(peers: Peers):
     """
     Messages of extensions we don't speak are skipped however long they are,
@@ -306,6 +309,7 @@ async def test_no_connection_events_without_a_handshake(peers: Peers):
     assert events == []
 
 
+@pytest.mark.validation
 def test_incoming_from_ourselves(make_pipe: MakePipe):
     connection, _ = make_pipe()
     handshake = Handshake(INFO_HASH, OUR_ID)
@@ -321,6 +325,7 @@ async def test_keepalive(peers: Peers):
         assert await remote.receive_exactly(4) == KeepAlive().encode()
 
 
+@pytest.mark.limits
 async def test_times_out_on_its_own(peers: Peers):
     """A running peer closes itself when the peer goes quiet for too long"""
     config = Config(connect_timeout=0, handshake_timeout=0.05, timeout_check_interval=0.01)
@@ -391,6 +396,7 @@ def test_later_bitfield_replaces_what_the_peer_has(peers: Peers):
     assert list(peer.has) == [0]
 
 
+@pytest.mark.validation
 def test_requests(peers: Peers):
     """
     Blocks we asked for are returned once, and anything else is dropped,
@@ -435,6 +441,7 @@ def test_close_releases_requests(peers: Peers):
 # ---- timeouts ----
 
 
+@pytest.mark.limits
 def test_no_handshake(peers: Peers):
     peer = peers.new()
     limit = CONFIG.connect_timeout + CONFIG.handshake_timeout
@@ -444,6 +451,7 @@ def test_no_handshake(peers: Peers):
     assert peer.close_reason is CloseReason.NO_HANDSHAKE
 
 
+@pytest.mark.limits
 def test_requests_time_out(peers: Peers):
     """Pending requests time out when no block arrives, even if the peer sends other things"""
     peer = peers.new(incoming=True)
@@ -456,6 +464,7 @@ def test_requests_time_out(peers: Peers):
     assert peer.close_reason is CloseReason.REQUESTS_TIMED_OUT
 
 
+@pytest.mark.limits
 def test_idle(peers: Peers):
     peer = peers.new(incoming=True)
     peer._check_timeouts(CONFIG.peer_idle_timeout)

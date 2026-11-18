@@ -250,6 +250,7 @@ async def test_failed_piece_is_asked_for_again(torrent, make_swarm: MakeSwarm, c
         await assert_sent(remote, Request(5, 0, B), Request(5, B, B))
 
 
+@pytest.mark.limits
 async def test_peers_are_asked_again_once_a_piece_makes_room(
     torrent, make_swarm: MakeSwarm, connect: Connect
 ):
@@ -274,6 +275,7 @@ async def test_peers_are_asked_again_once_a_piece_makes_room(
         await assert_sent(remote, Request(6, 0, B), Request(6, B, B))
 
 
+@pytest.mark.bans
 async def test_banned_peers(torrents, make_swarm: MakeSwarm, connect: Connect):
     """
     A peer banned by any torrent is closed right away and leaves the swarm,
@@ -298,6 +300,7 @@ async def test_banned_peers(torrents, make_swarm: MakeSwarm, connect: Connect):
         assert peer.addr not in swarm._candidates
 
 
+@pytest.mark.bans
 async def test_malformed_messages_get_a_ban(torrent, make_swarm: MakeSwarm, connect: Connect):
     swarm = make_swarm(torrent)
     swarm.picker.want([5])
@@ -312,6 +315,7 @@ async def test_malformed_messages_get_a_ban(torrent, make_swarm: MakeSwarm, conn
     assert swarm.shared.is_banned(peer.addr)
 
 
+@pytest.mark.validation
 def test_trackers_we_cant_announce_to_are_skipped(torrent, make_swarm: MakeSwarm):
     trackers = [
         ["udp://tracker.example/announce", "http://tracker.example/announce"],
@@ -321,6 +325,8 @@ def test_trackers_we_cant_announce_to_are_skipped(torrent, make_swarm: MakeSwarm
     assert swarm.trackers == ["http://tracker.example/announce"]
 
 
+@pytest.mark.limits
+@pytest.mark.bans
 async def test_should_connect(torrent, make_swarm: MakeSwarm, connect: Connect):
     """
     We connect with a peer, whichever side starts it, only while running and wanting pieces,
@@ -445,6 +451,7 @@ async def test_backoff_grows_while_a_tracker_doesnt_answer(torrent, tracker, mak
     ],
     ids=["asked", "too short", "negative", "too long"],
 )
+@pytest.mark.limits
 async def test_trackers_interval_wins(
     torrent, tracker, make_swarm: MakeSwarm, asked: int, waited: float
 ):
@@ -457,6 +464,7 @@ async def test_trackers_interval_wins(
     assert before + waited <= at <= anyio.current_time() + waited
 
 
+@pytest.mark.network_policy
 def test_blocked_candidates_are_skipped(torrent, make_swarm: MakeSwarm):
     """The configured blocklist replaces the defaults, which block addresses that can't be peers"""
     swarm = make_swarm(torrent)
@@ -470,6 +478,7 @@ def test_blocked_candidates_are_skipped(torrent, make_swarm: MakeSwarm):
     assert set(swarm._candidates) == {Addr.parse("0.0.0.0", 80)}
 
 
+@pytest.mark.network_policy
 async def test_tracker_host_names_are_looked_up(torrent, make_swarm: MakeSwarm, names):
     """Peers a tracker gives as host names become candidates if they resolve to an allowed IP"""
     names.update({"peer.example": "10.0.0.1", "blocked.example": "0.0.0.0"})
@@ -500,6 +509,7 @@ async def test_known_host_names_are_looked_up(torrent, make_swarm: MakeSwarm, na
     }
 
 
+@pytest.mark.limits
 async def test_stopped_announces_wait_their_turn(torrent, tracker, make_swarm: MakeSwarm):
     """Saying we stopped takes a place in the limit on announces, like any other announce"""
     peer_id = os.urandom(20)

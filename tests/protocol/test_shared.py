@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from btmc import Config
 from btmc.protocol.shared import BanReason, Shared
 from btmc.types import Addr
@@ -8,6 +10,7 @@ from btmc.types import Addr
 PEER_ID = b"A" * 20
 
 
+@pytest.mark.bans
 def test_save_and_load(tmp_path: Path):
     """Banned peers outlast the client"""
     path = tmp_path / "state.json"

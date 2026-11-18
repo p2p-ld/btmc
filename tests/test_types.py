@@ -26,6 +26,7 @@ def test_parse_addr(value, expected):
 
 
 @pytest.mark.parametrize("value", ["127.0.0.1", ":6881", "host:port", "a b:80"])
+@pytest.mark.validation
 def test_parse_addr_invalid(value):
     with pytest.raises(ValueError):
         parse_addr(value)
@@ -52,6 +53,7 @@ def test_addr_str_parses_back(text):
         ("010.0.0.1", "8.0.0.1"),
     ],
 )
+@pytest.mark.validation
 def test_addr_is_written_one_way(host, expected):
     assert str(Addr.parse(host, 1).ip) == expected
 
@@ -70,17 +72,20 @@ def test_addr_is_written_one_way(host, expected):
         ("dead.beef", 1),
     ],
 )
+@pytest.mark.validation
 def test_addr_invalid(host, port):
     with pytest.raises(ValueError):
         Addr.parse(host, port)
 
 
+@pytest.mark.validation
 def test_addr_is_only_made_from_ips():
     """Text has to be parsed, so an address that wasn't checked can't get in"""
     with pytest.raises(TypeError):
         Addr("10.0.0.1", 1)  # type: ignore[arg-type]
 
 
+@pytest.mark.validation
 def test_addr_cant_be_made_invalid():
     addr = Addr.parse("10.0.0.1", 1)
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -91,6 +96,7 @@ def test_addr_cant_be_made_invalid():
     assert mapped.ip == IPv4Address("10.0.0.2")
 
 
+@pytest.mark.validation
 def test_addr_isnt_a_tuple():
     """So an address that wasn't checked can't stand in for one"""
     assert Addr.parse("10.0.0.1", 1) != (IPv4Address("10.0.0.1"), 1)
@@ -114,6 +120,7 @@ def test_addr_pickles(addr):
         ("xn--trackr-fva.example", "xn--trackr-fva.example"),
     ],
 )
+@pytest.mark.validation
 def test_domain_addr_is_written_one_way(name, expected):
     assert DomainAddr(name, 1).name == expected
 
@@ -138,6 +145,7 @@ def test_domain_addr_is_written_one_way(name, expected):
         ("::1", 1),
     ],
 )
+@pytest.mark.validation
 def test_domain_addr_invalid(name, port):
     with pytest.raises(ValueError):
         DomainAddr(name, port)

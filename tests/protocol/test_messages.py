@@ -85,16 +85,19 @@ def test_handshake():
         b"\x00\x00\x00\x05\x06\x00\x00\x00\x01",
     ],
 )
+@pytest.mark.validation
 def test_malformed_peer_message(data):
     with pytest.raises(MalformedMessage):
         PeerMessage.decode(data)
 
 
+@pytest.mark.validation
 def test_length_prefix_has_to_match():
     with pytest.raises(PeerError):
         PeerMessage.decode(b"\x00\x00\x00\x02\x00")
 
 
+@pytest.mark.validation
 def test_peer_message_of_the_wrong_type():
     with pytest.raises(PeerError):
         Have.decode(Choke().encode())
@@ -110,6 +113,7 @@ def test_bitfield():
     assert bits.count() == 4
 
 
+@pytest.mark.validation
 def test_bitfield_spare_bits():
     """Bits past the last piece aren't pieces, even if a peer sets them"""
     bits = Bitfield(10, bytes([0, 0b00111111]))
@@ -123,6 +127,7 @@ def test_bitfield_full():
     assert Bitfield.full(10).count() == 10
 
 
+@pytest.mark.validation
 def test_bitfield_wrong_size():
     with pytest.raises(ValueError):
         Bitfield(10, bytes(1))
@@ -147,6 +152,7 @@ def test_bitfield_for_pieces():
         (bytes(15) + bytes([1, 0x1A, 0xE1]), 18, [Addr.parse("::1", 6881)]),
     ],
 )
+@pytest.mark.validation
 def test_decode_peers(data, size, expected):
     assert _decode_peers(data, size) == expected
 
@@ -237,6 +243,7 @@ def test_udp_responses(data, ipv6, expected):
         bytes.fromhex("000000010000000900000708"),
     ],
 )
+@pytest.mark.validation
 def test_udp_responses_bad(data):
     with pytest.raises(TrackerError):
         decode_udp(data, ipv6=False)
@@ -301,6 +308,7 @@ def test_udp_responses_bad(data):
         ),
     ],
 )
+@pytest.mark.validation
 def test_http_responses(body, expected):
     assert decode_http(body) == expected
 
@@ -316,10 +324,11 @@ def test_http_responses(body, expected):
         b"d14:failure reasonle",
         b"d8:interval2:60e5:peers0:e",
         # nesting this deep crashed the process before it was limited
-        b"l" * 60000 + b"e" * 60000,
-        b"d5:peers" + b"l" * 101 + b"e" * 101 + b"e",
+        pytest.param(b"l" * 60000 + b"e" * 60000, marks=pytest.mark.limits),
+        pytest.param(b"d5:peers" + b"l" * 101 + b"e" * 101 + b"e", marks=pytest.mark.limits),
     ],
 )
+@pytest.mark.validation
 def test_malformed_http_response(body):
     with pytest.raises(TrackerError):
         decode_http(body)
@@ -338,10 +347,12 @@ def test_malformed_http_response(body):
         (Piece, [8, 8 + 16384], [7, 8 + 16384 + 1]),
     ],
 )
+@pytest.mark.validation
 def test_valid_length(kind, valid, invalid):
     assert all(PeerMessage.valid_length(kind.id, length, n_pieces=9) for length in valid)
     assert not any(PeerMessage.valid_length(kind.id, length, n_pieces=9) for length in invalid)
 
 
+@pytest.mark.validation
 def test_extensions_we_dont_speak_can_be_any_length():
     assert PeerMessage.valid_length(20, 2**31, n_pieces=9)

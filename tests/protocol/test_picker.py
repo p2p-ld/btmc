@@ -50,6 +50,7 @@ def test_padding_isnt_asked_for():
     assert checking == [1]
 
 
+@pytest.mark.limits
 def test_no_new_piece_while_checks_are_behind():
     """
     While the most pieces allowed are waiting for their check, no new piece is started,
@@ -198,6 +199,7 @@ def test_callbacks_hear_each_state_entered(picker):
     ]
 
 
+@pytest.mark.validation
 def test_wrong_size_and_duplicate_blocks_arent_received(picker):
     picker.want([5])
     picker.pick(Bitfield.from_pieces(10, [5]))

@@ -68,6 +68,7 @@ def test_fetch_piece_out_of_range(torrent_file, tmp_path):
     assert "there's no piece 100000" in result.output
 
 
+@pytest.mark.limits
 def test_torrent_past_the_limits(torrent_file, tmp_path, monkeypatch):
     """The torrent is read with the limits in btmc.toml"""
     monkeypatch.chdir(tmp_path)

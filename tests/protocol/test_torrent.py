@@ -117,6 +117,7 @@ async def test_good_piece(make_state, torrent, test_data):
     assert list(make_state(torrent).picker.have) == [5]
 
 
+@pytest.mark.limits
 async def test_checks_wait_for_a_hashing_thread(make_state, torrent, test_data):
     """
     Checks take one of the hashing threads shared by every torrent,
@@ -168,6 +169,7 @@ async def test_resume_file_is_trusted(make_state, torrent, test_data):
     assert t.have.count() == 0
 
 
+@pytest.mark.confinement
 async def test_resume_file_is_out_of_reach(make_state, torrent, state_dir):
     """The resume file is in the state directory, where no file in a torrent can reach it"""
     t = make_state(torrent)
@@ -225,6 +227,7 @@ async def test_padding_isnt_fetched(make_state):
     assert not t.store.path("t/.pad").exists()
 
 
+@pytest.mark.bans
 async def test_bad_piece_from_one_peer(make_state, torrent):
     """The peer is banned for every torrent, and the piece is open to fetch again"""
     t = make_state(torrent)
@@ -236,6 +239,7 @@ async def test_bad_piece_from_one_peer(make_state, torrent):
     assert t.picker.piece_state(5) is PieceState.OPEN
 
 
+@pytest.mark.bans
 async def test_bad_block_found_when_the_piece_passes(make_state, torrent, test_data):
     """
     When a piece from two peers fails, nobody is banned yet. Once it passes,
@@ -268,11 +272,13 @@ def received(*blocks: tuple[bytes, Addr]) -> ReceivedPiece:
     return ReceivedPiece(5, {i * B: block for i, block in enumerate(blocks)})
 
 
+@pytest.mark.bans
 def test_smart_ban_one_sender():
     ban = SmartBan()
     assert ban.checked(received((BAD, PEER), (GOOD, PEER)), ok=False) == {PEER}
 
 
+@pytest.mark.bans
 def test_smart_ban_on_pass():
     """A peer whose block differs from the one in the piece that passed is to blame"""
     ban = SmartBan()
@@ -282,6 +288,7 @@ def test_smart_ban_on_pass():
     assert ban.checked(received((GOOD, OTHER), (GOOD, OTHER)), ok=True) == set()
 
 
+@pytest.mark.bans
 def test_smart_ban_same_block_changed():
     """A peer that sends the same block with different data is to blame"""
     ban = SmartBan()

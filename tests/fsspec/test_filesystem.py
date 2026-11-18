@@ -125,6 +125,7 @@ def test_zip_chaining(fs_options, torrent):
     assert [json.loads(line) for line in lines[1:]] == PAGES
 
 
+@pytest.mark.limits
 def test_torrents_past_the_limits(make_fs, torrent_file, torrent):
     """.torrent files are read with the config's limits, and ones past them aren't found"""
     config = Config(torrent_limits=LoadLimits(max_pieces=1))
