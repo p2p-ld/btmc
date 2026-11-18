@@ -1,5 +1,4 @@
 import asyncio
-import ipaddress
 import os
 import socket
 import struct
@@ -19,7 +18,7 @@ __all__ = ["MiniTracker", "TrackerUrls", "reset_tracker", "tracker", "tracker_ur
 
 
 def compact(addrs: list[Addr]) -> bytes:
-    return b"".join(ipaddress.ip_address(ip).packed + port.to_bytes(2) for ip, port in addrs)
+    return b"".join(a.ip.packed + a.port.to_bytes(2) for a in addrs)
 
 
 class TrackerUrls(NamedTuple):
@@ -91,10 +90,10 @@ class MiniTracker:
         if event == "stopped":
             swarm.pop(peer_id, None)
         else:
-            swarm[peer_id] = (ip, port)
+            swarm[peer_id] = Addr.parse(ip, port)
         peers = [addr for pid, addr in swarm.items() if pid != peer_id]
         if info_hash in self.only:
-            peers = [a for a in peers if a[1] in self.only[info_hash]]
+            peers = [a for a in peers if a.port in self.only[info_hash]]
         return peers
 
     async def next_event(self, peer_id: bytes) -> tuple[bytes, str]:
@@ -137,7 +136,7 @@ class MiniTracker:
         finally:
             writer.close()
 
-    def _answer_udp(self, data: bytes, addr: Addr) -> bytes | None:
+    def _answer_udp(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
         action, txid = struct.unpack(">II", data[8:16])
         if action == 0:
             return struct.pack(">II", 0, txid) + os.urandom(8)
@@ -154,13 +153,13 @@ class MiniTracker:
 class _DatagramServer(asyncio.DatagramProtocol):
     """Answers each datagram with what ``answer`` returns for it, if anything"""
 
-    def __init__(self, answer: Callable[[bytes, Addr], bytes | None]):
+    def __init__(self, answer: Callable[[bytes, tuple[str, int]], bytes | None]):
         self._answer = answer
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
         self._transport = transport
 
-    def datagram_received(self, data: bytes, addr: Addr) -> None:
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if (reply := self._answer(data, addr)) is not None:
             self._transport.sendto(reply, addr)
 

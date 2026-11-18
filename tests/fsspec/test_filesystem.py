@@ -10,6 +10,7 @@ import json
 
 import fsspec
 import pytest
+from torrent_models import LoadLimits
 
 from btmc.config import Config
 from btmc.fsspec import TorrentFileSystem
@@ -37,7 +38,7 @@ def fs_options(torrent_dir, seeders, tmp_path) -> dict:
         "download_dir": str(tmp_path / "downloads"),
         "torrent_dirs": [str(torrent_dir)],
         "trackers": [],
-        "peers": [list(s.addr) for s in seeders],
+        "peers": [str(s.addr) for s in seeders],
     }
 
 
@@ -122,6 +123,14 @@ def test_zip_chaining(fs_options, torrent):
     with fsspec.open(url, torrent=fs_options) as f:
         lines = f.read().decode().splitlines()
     assert [json.loads(line) for line in lines[1:]] == PAGES
+
+
+def test_torrents_past_the_limits(make_fs, torrent_file, torrent):
+    """.torrent files are read with the config's limits, and ones past them aren't found"""
+    config = Config(torrent_limits=LoadLimits(max_pieces=1))
+    fs = make_fs(torrent_dirs=[torrent_file.parent], config=config)
+    assert fs.registry.get(torrent_name(torrent)) is None
+    assert make_fs(torrent_dirs=[torrent_file.parent]).registry.get(torrent_name(torrent))
 
 
 def test_download_dir_goes_in_config(make_fs, tmp_path):

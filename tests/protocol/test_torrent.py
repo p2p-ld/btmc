@@ -22,8 +22,8 @@ from btmc.types import Addr, Block
 from btmc.utils import torrent_name
 
 OUR_ID = b"A" * 20
-PEER = Addr("10.0.0.1", 1)
-OTHER = Addr("10.0.0.2", 1)
+PEER = Addr.parse("10.0.0.1", 1)
+OTHER = Addr.parse("10.0.0.2", 1)
 B = 16384
 """Block size. The test torrents' pieces are two blocks."""
 
@@ -34,14 +34,17 @@ type MakeState = Callable[..., TorrentState]
 @pytest.fixture
 def make_state(tmp_path: Path) -> Iterator[MakeState]:
     """
-    Makes torrents in ``tmp_path``. Running one closes its check queue when it stops,
-    and the ones that never ran are closed after the test.
+    Makes torrents in ``tmp_path``, or another root. Running one closes its check queue
+    when it stops, and the ones that never ran are closed after the test.
     """
     made: list[TorrentState] = []
 
-    def make(torrent: Torrent, config: Config | None = None) -> TorrentState:
+    def make(
+        torrent: Torrent, config: Config | None = None, root: Path | None = None
+    ) -> TorrentState:
         shared = Shared(config or Config(), OUR_ID)
-        t = TorrentState(torrent, tmp_path / torrent_name(torrent), shared, trackers=[])
+        root = root or tmp_path / torrent_name(torrent)
+        t = TorrentState(torrent, root, shared, trackers=[])
         made.append(t)
         return t
 
@@ -163,6 +166,33 @@ async def test_resume_file_is_trusted(make_state, torrent, test_data):
     async with running(t):
         await anyio.wait_all_tasks_blocked()
     assert t.have.count() == 0
+
+
+async def test_resume_file_is_out_of_reach(make_state, torrent, state_dir):
+    """The resume file is in the state directory, where no file in a torrent can reach it"""
+    t = make_state(torrent)
+    path = t.store.resume_path
+    assert path.is_relative_to(state_dir)
+    assert not path.is_relative_to(t.store.root)
+    with pytest.raises(ValueError):
+        t.store.path(os.path.relpath(path, t.store.root))
+
+
+async def test_resume_file_for_each_root(make_state, torrent, test_data, tmp_path):
+    """
+    The same torrent fetched into another directory has its own resume file,
+    so it doesn't get the first one's pieces, even when the data is there too
+    """
+    t = make_state(torrent)
+    shutil.copytree(test_data, t.store.root, dirs_exist_ok=True)
+    await t._check_disk()
+    assert t.have.count() == t.n_pieces
+    other_root = tmp_path / "other"
+    shutil.copytree(test_data, other_root)
+    other = make_state(torrent, root=other_root)
+    assert other.store.resume_path != t.store.resume_path
+    assert other.have.count() == 0
+    assert make_state(torrent).have.count() == t.n_pieces
 
 
 async def test_padding_isnt_fetched(make_state):

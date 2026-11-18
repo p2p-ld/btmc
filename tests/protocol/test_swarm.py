@@ -6,7 +6,10 @@ and its decisions about connecting and announcing
 import contextlib
 import itertools
 import os
-from collections.abc import AsyncGenerator, Awaitable, Callable
+import socket
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from ipaddress import ip_network
+from unittest.mock import AsyncMock, patch
 
 import anyio
 import pytest
@@ -15,6 +18,7 @@ from torrent_models import Torrent
 
 from btmc import Config, Peer
 from btmc.protocol.messages import (
+    AnnounceResponse,
     Bitfield,
     BitfieldMessage,
     Choke,
@@ -27,9 +31,9 @@ from btmc.protocol.messages import (
 )
 from btmc.protocol.peer import CloseReason
 from btmc.protocol.picker import PiecePicker
-from btmc.protocol.shared import Shared
+from btmc.protocol.shared import BanReason, Shared
 from btmc.protocol.swarm import Swarm
-from btmc.types import Addr, Block
+from btmc.types import Addr, AnyAddr, Block, DomainAddr
 
 from ..fixtures import MakePipe
 
@@ -45,13 +49,30 @@ type Connect = Callable[..., Awaitable[tuple[Peer, BufferedByteStream]]]
 @pytest.fixture
 def make_swarm() -> MakeSwarm:
     def make(
-        torrent: Torrent, shared: Shared | None = None, trackers: list[list[str]] | None = None
+        torrent: Torrent,
+        shared: Shared | None = None,
+        trackers: list[list[str]] | None = None,
+        known_peers: Sequence[AnyAddr] = (),
     ) -> Swarm:
         shared = shared or Shared(Config(), OUR_ID)
         picker = PiecePicker(torrent.layout, shared.config.max_pieces_checking)
-        return Swarm(torrent, picker, shared, trackers=trackers or [])
+        return Swarm(torrent, picker, shared, trackers=trackers or [], known_peers=known_peers)
 
     return make
+
+
+@pytest.fixture
+def names(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Host names that resolve, to the IP each points to. Other names don't resolve."""
+    names: dict[str, str] = {}
+
+    async def resolve(self: DomainAddr) -> Addr:
+        if self.name not in names:
+            raise socket.gaierror(socket.EAI_NONAME, "not found")
+        return Addr.parse(names[self.name], self.port)
+
+    monkeypatch.setattr(DomainAddr, "resolve", resolve)
+    return names
 
 
 @pytest.fixture
@@ -66,7 +87,7 @@ def connect(make_pipe: MakePipe) -> Connect:
         swarm: Swarm, port: int, has: list[int] | None = None
     ) -> tuple[Peer, BufferedByteStream]:
         connection, remote = make_pipe()
-        addr = Addr("10.0.0.1", port)
+        addr = Addr.parse("10.0.0.1", port)
         handshake = Handshake(swarm.info_hashes[0], bytes([port]) * 20)
         assert swarm.accept_connection(connection, addr, handshake)
         await remote.receive_exactly(Handshake.LENGTH)
@@ -267,7 +288,7 @@ async def test_banned_peers(torrents, make_swarm: MakeSwarm, connect: Connect):
         peer, _ = await connect(swarms[0], 1)
         for swarm in swarms:
             swarm.add_candidate(peer.addr, swarm.info_hashes[0])
-        shared.ban(peer.addr)
+        shared.ban(peer.addr, BanReason.BAD_DATA)
         assert peer.close_reason is CloseReason.BANNED
         await gone.wait()
         assert peer.addr not in swarms[0].peers
@@ -277,13 +298,36 @@ async def test_banned_peers(torrents, make_swarm: MakeSwarm, connect: Connect):
         assert peer.addr not in swarm._candidates
 
 
+async def test_malformed_messages_get_a_ban(torrent, make_swarm: MakeSwarm, connect: Connect):
+    swarm = make_swarm(torrent)
+    swarm.picker.want([5])
+    gone = anyio.Event()
+    swarm.add_callback("disconnected", lambda _: gone.set())
+    async with running(swarm):
+        peer, remote = await connect(swarm, 1)
+        # a choke with a body
+        await remote.send((2).to_bytes(4) + b"\x00\x00")
+        await gone.wait()
+    assert peer.close_reason is CloseReason.MALFORMED_MESSAGE
+    assert swarm.shared.is_banned(peer.addr)
+
+
+def test_trackers_we_cant_announce_to_are_skipped(torrent, make_swarm: MakeSwarm):
+    trackers = [
+        ["udp://tracker.example/announce", "http://tracker.example/announce"],
+        ["ftp://tracker.example/announce", "http://tracker.example/announce"],
+    ]
+    swarm = make_swarm(torrent, trackers=trackers)
+    assert swarm.trackers == ["http://tracker.example/announce"]
+
+
 async def test_should_connect(torrent, make_swarm: MakeSwarm, connect: Connect):
     """
     We connect with a peer, whichever side starts it, only while running and wanting pieces,
     with room for another connection, and if we aren't connected to it already or banned it
     """
     swarm = make_swarm(torrent, Shared(Config(max_peers=2), OUR_ID))
-    new = Addr("10.0.0.9", 1)
+    new = Addr.parse("10.0.0.9", 1)
     swarm.picker.want([0])
     gone = anyio.Event()
     swarm.add_callback("disconnected", lambda _: gone.set())
@@ -297,10 +341,10 @@ async def test_should_connect(torrent, make_swarm: MakeSwarm, connect: Connect):
         swarm.remove_peer(peer, CloseReason.STOPPING)
         await gone.wait()
         assert swarm._should_connect(new)
-        swarm.shared.ban(new)
+        swarm.shared.ban(new, BanReason.BAD_DATA)
         assert not swarm._should_connect(new)
         swarm.picker.found([0])
-        assert not swarm._should_connect(Addr("10.0.0.10", 1))
+        assert not swarm._should_connect(Addr.parse("10.0.0.10", 1))
 
 
 @pytest.mark.parametrize("version", ["hybrid"], indirect=True)
@@ -311,7 +355,7 @@ async def test_ready_candidates(torrent, make_swarm: MakeSwarm):
     """
     swarm = make_swarm(torrent)
     v2, v1 = swarm.info_hashes
-    addr = Addr("10.0.0.9", 1)
+    addr = Addr.parse("10.0.0.9", 1)
     swarm.add_candidate(addr, v1)
     swarm.add_candidate(addr, v2)
     assert swarm._ready_candidates(now=0) == [(addr, v2)]
@@ -411,6 +455,49 @@ async def test_trackers_interval_wins(
     before = anyio.current_time()
     at = await swarm._announce(tracker.urls.http, swarm.info_hashes[0])
     assert before + waited <= at <= anyio.current_time() + waited
+
+
+def test_blocked_candidates_are_skipped(torrent, make_swarm: MakeSwarm):
+    """The configured blocklist replaces the defaults, which block addresses that can't be peers"""
+    swarm = make_swarm(torrent)
+    for blocked in ["0.0.0.0", "224.0.0.1", "255.255.255.255", "::", "fe80::1", "ff02::1"]:
+        swarm.add_candidate(Addr.parse(blocked, 80), swarm.info_hashes[0])
+    assert not swarm._candidates
+
+    swarm = make_swarm(torrent, Shared(Config(ip_blocklist=[ip_network("10.0.0.0/8")]), OUR_ID))
+    swarm.add_candidate(Addr.parse("10.0.0.1", 80), swarm.info_hashes[0])
+    swarm.add_candidate(Addr.parse("0.0.0.0", 80), swarm.info_hashes[0])
+    assert set(swarm._candidates) == {Addr.parse("0.0.0.0", 80)}
+
+
+async def test_tracker_host_names_are_looked_up(torrent, make_swarm: MakeSwarm, names):
+    """Peers a tracker gives as host names become candidates if they resolve to an allowed IP"""
+    names.update({"peer.example": "10.0.0.1", "blocked.example": "0.0.0.0"})
+    swarm = make_swarm(torrent)
+    peers: list[AnyAddr] = [
+        Addr.parse("10.0.0.2", 80),
+        DomainAddr("peer.example", 80),
+        DomainAddr("blocked.example", 80),
+        DomainAddr("nowhere.example", 80),
+    ]
+    response = AsyncMock(return_value=AnnounceResponse(60, peers))
+    with patch("btmc.protocol.swarm.announce", response):
+        await swarm._announce("http://tracker.example/announce", swarm.info_hashes[0])
+    assert set(swarm._candidates) == {Addr.parse("10.0.0.2", 80), Addr.parse("10.0.0.1", 80)}
+
+
+async def test_known_host_names_are_looked_up(torrent, make_swarm: MakeSwarm, names):
+    """Known peers become candidates when the swarm runs, for every info hash"""
+    names["peer.example"] = "10.0.0.1"
+    known = [Addr.parse("10.0.0.2", 80), DomainAddr("peer.example", 81)]
+    swarm = make_swarm(torrent, known_peers=known)
+    assert not swarm._candidates
+    async with running(swarm):
+        candidates = {addr: c.info_hashes for addr, c in swarm._candidates.items()}
+    assert candidates == {
+        Addr.parse("10.0.0.2", 80): swarm.info_hashes,
+        Addr.parse("10.0.0.1", 81): swarm.info_hashes,
+    }
 
 
 async def test_stopped_announces_wait_their_turn(torrent, tracker, make_swarm: MakeSwarm):
