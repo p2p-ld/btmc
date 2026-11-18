@@ -1,14 +1,31 @@
 import dataclasses
+import ipaddress
 import os
 import tomllib
 from dataclasses import dataclass
+from ipaddress import IPv4Network, IPv6Network
 from pathlib import Path
 from typing import Any, Self
 
 import platformdirs
+from torrent_models import LoadLimits
 
 CONFIG_FILE = "btmc.toml"
 """Where :meth:`.Config.from_toml` looks by default, in the current directory"""
+
+DEFAULT_IP_BLOCKLIST = (
+    "0.0.0.0/8",
+    "::/128",
+    "224.0.0.0/4",
+    "ff00::/8",
+    "240.0.0.0/4",
+    "fe80::/10",
+)
+"""
+Addresses that can't be a peer: unspecified ("this network"), multicast,
+reserved IPv4 (including the broadcast address), and IPv6 link-local, which needs to know
+which interface to use. libtorrent refuses the unspecified and IPv6 link-local addresses too.
+"""
 
 
 @dataclass
@@ -43,6 +60,12 @@ class Config:
     Pieces per torrent that are complete and waiting for their hash check, held in memory.
     While this many are, no new piece is started, until the checks catch up.
     """
+    torrent_limits: LoadLimits = dataclasses.field(default_factory=LoadLimits.libtorrent)
+    """
+    Limits on the .torrent files we read, like how many pieces they can have.
+    Defaults to libtorrent's. In TOML it's a table, whose settings replace those defaults
+    one by one, like ``[torrent_limits]`` then ``max_pieces = 100000``.
+    """
 
     # ---- peers ----
 
@@ -63,6 +86,14 @@ class Config:
     """How long to wait before retrying a peer that failed, doubled for each failure in a row"""
     max_peer_failures: int = 5
     """Failures in a row before giving up on a peer"""
+    ip_blocklist: list[IPv4Network | IPv6Network] = dataclasses.field(
+        default_factory=lambda: [ipaddress.ip_network(net) for net in DEFAULT_IP_BLOCKLIST]
+    )
+    """
+    Networks we never connect to or take connections from, like ``"10.0.0.0/8"``.
+    Peers given as host names are looked up first. Defaults to :data:`.DEFAULT_IP_BLOCKLIST`;
+    setting it replaces those, so include them to add to them.
+    """
 
     # ---- trackers ----
 
@@ -102,6 +133,15 @@ class Config:
     Defaults to the user cache directory, like ``~/Library/Caches/btmc`` on macOS
     and ``~/.cache/btmc`` on Linux.
     """
+    state_dir: Path = dataclasses.field(
+        default_factory=lambda: platformdirs.user_state_path("btmc")
+    )
+    """
+    Where to keep which pieces of each torrent we have, apart from the torrents' own files,
+    so nothing in a torrent can change it.
+    Defaults to the user state directory, like ``~/Library/Application Support/btmc``
+    on macOS and ``~/.local/state/btmc`` on Linux.
+    """
     state_file: Path | None = None
     """Where to keep state between runs, like banned peers. ``None`` keeps nothing."""
 
@@ -109,8 +149,17 @@ class Config:
         # paths come from TOML as strings
         if isinstance(self.download_dir, str):
             self.download_dir = Path(self.download_dir).expanduser()
+        if isinstance(self.state_dir, str):
+            self.state_dir = Path(self.state_dir).expanduser()
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
+        # and networks as strings, raising ValueError for ones like 10.0.0.1/8
+        self.ip_blocklist = [ipaddress.ip_network(net) for net in self.ip_blocklist]
+        # and tables as dicts
+        if isinstance(self.torrent_limits, dict):
+            self.torrent_limits = dataclasses.replace(
+                LoadLimits.libtorrent(), **self.torrent_limits
+            )
 
     @classmethod
     def from_toml(cls, path: Path | str | None = None, **settings: Any) -> Self:

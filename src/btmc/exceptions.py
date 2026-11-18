@@ -2,6 +2,10 @@ class PeerError(Exception):
     """The peer broke the protocol"""
 
 
+class MalformedMessage(PeerError):
+    """The peer sent a message whose length is wrong for its kind, which no working client does"""
+
+
 class TrackerError(Exception):
     """The tracker didn't answer, refused, or sent something we can't use"""
 

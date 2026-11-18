@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import platformdirs
 import pytest
 from torrent_models import Torrent
 
@@ -9,13 +10,25 @@ from btmc import Client, Config, TorrentState
 from .seeders import LtSeeder
 from .tracker import MiniTracker
 
-__all__ = ["client", "config", "one_torrent", "seeded"]
+__all__ = ["client", "config", "one_torrent", "seeded", "state_dir"]
+
+
+@pytest.fixture(autouse=True)
+def state_dir(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """
+    The default :attr:`.Config.state_dir`, a new one for each test, so tests never touch
+    the real one, or see each other's resume files. Also for configs made inside btmc,
+    like the CLI's.
+    """
+    path = tmp_path_factory.mktemp("state")
+    monkeypatch.setattr(platformdirs, "user_state_path", lambda *args, **kwargs: path)
+    return path
 
 
 @pytest.fixture
-def config(request: pytest.FixtureRequest, tmp_path: Path) -> Config:
+def config(request: pytest.FixtureRequest, tmp_path: Path, state_dir: Path) -> Config:
     """Downloads go in ``tmp_path``. Parametrize indirectly with a dict of other settings."""
-    return Config(download_dir=tmp_path, **getattr(request, "param", {}))
+    return Config(download_dir=tmp_path, state_dir=state_dir, **getattr(request, "param", {}))
 
 
 @pytest.fixture

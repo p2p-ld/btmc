@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
-from torrent_models import Torrent
+from torrent_models import LoadLimits, Torrent
 
 from btmc.utils import info_hashes, wire_hash
 
@@ -27,12 +27,17 @@ class TorrentRegistry:
     Args:
         dirs: directories to look for .torrent files in, recursively
         files: torrents, or .torrent files, to add now
+        limits: limits on the .torrent files it reads. By default there are none.
     """
 
     def __init__(
-        self, dirs: Sequence[Path | str] = (), files: Sequence[Torrent[Any] | Path | str] = ()
+        self,
+        dirs: Sequence[Path | str] = (),
+        files: Sequence[Torrent[Any] | Path | str] = (),
+        limits: LoadLimits | None = None,
     ):
         self.dirs = [Path(d) for d in dirs]
+        self._limits = LoadLimits() if limits is None else limits
         self._torrents: dict[bytes, Torrent[Any]] = {}
         """info hash, see :func:`.wire_hash` -> torrent"""
         self._by_path: dict[Path, Torrent[Any] | None] = {}
@@ -49,7 +54,7 @@ class TorrentRegistry:
                 cached = self._by_path.get(path)
                 if cached is not None:
                     return cached
-                torrent = Torrent.read(path)
+                torrent = Torrent.read(path, context={"limits": self._limits})
                 self._by_path[path] = torrent
             for info_hash in info_hashes(torrent):
                 self._torrents[info_hash] = torrent

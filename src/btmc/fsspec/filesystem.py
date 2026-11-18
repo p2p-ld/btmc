@@ -34,7 +34,7 @@ from btmc.files.zip import TorrentZip, ZipMember
 from btmc.fsspec.registry import TorrentRegistry
 from btmc.protocol.client import Client
 from btmc.protocol.torrent import TorrentState
-from btmc.types import PieceIndex, parse_addr
+from btmc.types import AnyAddr, PieceIndex, parse_addr
 from btmc.utils import torrent_name
 
 log = logging.getLogger(__name__)
@@ -126,15 +126,11 @@ class TorrentFileSystem(AsyncFileSystem):
         torrents: Sequence[Torrent[Any] | Path | str] = (),
         zips: Sequence[str] = (),
         trackers: list[list[str]] | None = None,
-        peers: Sequence[str | Sequence[Any]] = (),
+        peers: Sequence[AnyAddr | str | Sequence[Any]] = (),
         config: Config | dict[str, Any] | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
-        self.registry = TorrentRegistry(dirs=torrent_dirs, files=torrents)
-        self.zips = list(zips)
-        self.trackers = trackers
-        self.peers = [parse_addr(p) for p in peers]
         if config is None:
             config = Config.from_toml()
         elif isinstance(config, dict):
@@ -142,6 +138,10 @@ class TorrentFileSystem(AsyncFileSystem):
         if download_dir is not None:
             config = dataclasses.replace(config, download_dir=Path(download_dir).expanduser())
         self.config = config
+        self.registry = TorrentRegistry(torrent_dirs, torrents, config.torrent_limits)
+        self.zips = list(zips)
+        self.trackers = trackers
+        self.peers = [parse_addr(p) for p in peers]
         self._client: Client | None = None
         self._client_lock = asyncio.Lock()
         self._finalizer: weakref.finalize | None = None

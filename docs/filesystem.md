@@ -130,7 +130,8 @@ sometimes it does, sometimes it doesn't, who knows.
 Pieces are kept in `--download-dir`, in a directory for each torrent named by its info hash.
 By default that's `download_dir` in `btmc.toml`, or the user cache directory,
 like `~/Library/Caches/btmc` on macOS and `~/.cache/btmc` on Linux.
-`--clear-cache` deletes that directory first, to start from nothing.
+`--clear-cache` deletes that directory first, and the torrent's resume files
+in `state_dir`, to start from nothing.
 
 Ctrl-C unmounts. On macOS it unmounts even while an app has a file in the mount open,
 since FSKit volumes can't refuse.

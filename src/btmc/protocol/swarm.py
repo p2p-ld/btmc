@@ -24,9 +24,9 @@ from btmc.protocol.messages import (
 )
 from btmc.protocol.peer import CloseReason, ConnectionCallback, Peer
 from btmc.protocol.picker import PiecePicker, PieceState
-from btmc.protocol.shared import Shared
-from btmc.protocol.tracker import announce
-from btmc.types import Addr, Block, PieceIndex
+from btmc.protocol.shared import BanReason, Shared
+from btmc.protocol.tracker import announce, check_url
+from btmc.types import Addr, AnyAddr, Block, DomainAddr, PieceIndex
 from btmc.utils import info_hashes
 
 log = logging.getLogger(__name__)
@@ -80,6 +80,7 @@ class Swarm:
       to :meth:`._handle_message` and the requests it won't answer to :meth:`._released`,
       and closes itself
     - one per tracker and info hash, announcing while anything is wanted
+    - one per known peer given as a host name, looking it up
     - a heartbeat, every :attr:`.Config.connect_interval`, for what depends on time:
       retrying peers whose backoff has run out, and giving up connections
       other torrents are waiting for
@@ -99,7 +100,7 @@ class Swarm:
         shared: Shared,
         *,
         trackers: list[list[str]] | None = None,
-        known_peers: Sequence[Addr] = (),
+        known_peers: Sequence[AnyAddr] = (),
     ):
         self.picker = picker
         picker.add_callback(PieceState.OPEN, self._opened)
@@ -111,12 +112,15 @@ class Swarm:
         self.n_pieces = torrent.layout.n_pieces
         self.piece_length = torrent.info.piece_length
         self.info_hashes = info_hashes(torrent)
-        tiers = torrent.flat_trackers if trackers is None else trackers
-        self.trackers = list(dict.fromkeys(url for tier in tiers for url in tier))
+        self.trackers: list[str] = self._checked_trackers(
+            torrent.flat_trackers if trackers is None else trackers
+        )
         """
-        Every tracker's url. We announce to all of them at once, like qBittorrent,
-        rather than one tier at a time.
+        Every tracker's url, apart from ones we can't announce to.
+        We announce to all of them at once, like qBittorrent, rather than one tier at a time.
         """
+        self.known_peers = list(known_peers)
+        """Peers to connect to without asking a tracker, which become candidates when it runs"""
 
         self.peers: dict[Addr, Peer] = {}
         self.announced: set[tuple[str, bytes]] = set()
@@ -129,10 +133,6 @@ class Swarm:
         self._tg: TaskGroup | None = None
         self._stopping = False
         self._stopped = anyio.Event()
-
-        for addr in known_peers:
-            for info_hash in self.info_hashes:
-                self.add_candidate(addr, info_hash)
 
     @overload
     def add_callback(self, event: Literal["block"], callback: BlockCallback) -> None: ...
@@ -174,6 +174,12 @@ class Swarm:
                 for url in self.trackers:
                     for info_hash in self.info_hashes:
                         self._tg.start_soon(self._announce_loop, url, info_hash)
+                for addr in self.known_peers:
+                    if isinstance(addr, DomainAddr):
+                        self._tg.start_soon(self._resolve_candidate, addr, self.info_hashes)
+                        continue
+                    for info_hash in self.info_hashes:
+                        self.add_candidate(addr, info_hash)
                 self._connect(anyio.current_time())
                 while True:
                     await anyio.sleep(self.config.connect_interval)
@@ -227,13 +233,29 @@ class Swarm:
     # ---- peers ----
 
     def add_candidate(self, addr: Addr, info_hash: bytes) -> None:
-        """A peer we could connect to, in the swarm for an info hash"""
-        if self.shared.is_banned(addr):
+        """
+        A peer we could connect to, in the swarm for an info hash,
+        unless it's banned or blocked
+        """
+        if self.shared.is_banned(addr) or self.shared.is_blocked(addr):
             return
         candidate = self._candidates.setdefault(addr, _Candidate(info_hashes=[]))
         if info_hash not in candidate.info_hashes:
             candidate.info_hashes.append(info_hash)
             candidate.info_hashes.sort(key=self.info_hashes.index)
+
+    async def _resolve_candidate(self, name: DomainAddr, info_hashes: Sequence[bytes]) -> None:
+        """Look up a peer given by host name, and add the address it points to as a candidate"""
+        try:
+            with anyio.fail_after(self.config.connect_timeout):
+                addr = await name.resolve()
+        # including the TimeoutError from fail_after
+        except OSError as e:
+            log.debug("couldn't look up %s: %r", name, e)
+            return
+        for info_hash in info_hashes:
+            self.add_candidate(addr, info_hash)
+        self._connect(anyio.current_time())
 
     def remove_peer(self, peer: Peer, reason: CloseReason) -> None:
         """Close a connection. It's forgotten once it has finished closing."""
@@ -248,6 +270,8 @@ class Swarm:
         if peer.connected_at is not None:
             for callback in self._callbacks["disconnected"]:
                 callback(peer)
+        if peer.close_reason is not None and peer.close_reason.ban:
+            self.shared.ban(peer.addr, BanReason.MALFORMED_MESSAGE)
         candidate = self._candidates.get(peer.addr)
         if candidate is None or not peer.penalize:
             return
@@ -263,16 +287,16 @@ class Swarm:
     def _ready_candidates(self, now: float) -> list[tuple[Addr, bytes]]:
         """
         Candidates whose wait after their last connection is over, fewest failures first,
-        and the info hash to use with each
+        then in the order they were found, and the info hash to use with each
         """
         ready = sorted(
-            (c.failures, addr) for addr, c in self._candidates.items() if c.retry_at <= now
+            ((addr, c) for addr, c in self._candidates.items() if c.retry_at <= now),
+            key=lambda ready: ready[1].failures,
         )
         connect = []
-        for failures, addr in ready:
-            hashes = self._candidates[addr].info_hashes
+        for addr, c in ready:
             # if a peer is in both swarms and fails on one hash, try the other next time
-            connect.append((addr, hashes[failures % len(hashes)]))
+            connect.append((addr, c.info_hashes[c.failures % len(c.info_hashes)]))
         return connect
 
     def _should_connect(self, addr: Addr) -> bool:
@@ -413,9 +437,13 @@ class Swarm:
         self.shared.announced(url, now)
         log.debug("%s gave %d peers for %s", url, len(response.peers), info_hash.hex())
         self.announced.add((url, info_hash))
-        for addr in response.peers:
-            self.add_candidate(addr, info_hash)
-        self._connect(now)
+        async with anyio.create_task_group() as tg:
+            for addr in response.peers:
+                if isinstance(addr, DomainAddr):
+                    tg.start_soon(self._resolve_candidate, addr, [info_hash])
+                    continue
+                self.add_candidate(addr, info_hash)
+            self._connect(now)
         if response.interval is None:
             return now + self.config.announce_retry
         return now + min(
@@ -447,3 +475,14 @@ class Swarm:
             event=event,
             numwant=self.config.numwant,
         )
+
+    def _checked_trackers(self, tiers: list[list[str]]) -> list[str]:
+        trackers = []
+        for url in dict.fromkeys(url for tier in tiers for url in tier):
+            try:
+                check_url(url)
+            except TrackerError as e:
+                log.info("skipping tracker %r: %s", url, e)
+            else:
+                trackers.append(url)
+        return trackers

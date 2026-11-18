@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +16,14 @@ from btmc.config import Config
 from btmc.types import Addr
 
 log = logging.getLogger(__name__)
+
+
+class BanReason(StrEnum):
+    """Why a peer was banned"""
+
+    BAD_DATA = "sent bad data"
+    MALFORMED_MESSAGE = "sent a malformed message"
+
 
 type SharedEvent = Literal["ban"]
 """
@@ -38,7 +47,7 @@ class _TrackerBackoff:
 class Shared:
     """
     What a client's torrents share, and the only way they share anything:
-    who we are, limits on connections, announces and hashing, peers banned for sending bad data,
+    who we are, limits on connections, announces and hashing, banned and blocked peers,
     and trackers that aren't answering.
 
     Args:
@@ -80,15 +89,19 @@ class Shared:
         """Stop calling a callback, like when a torrent that added it is removed"""
         self._callbacks[event].remove(callback)
 
-    def ban(self, addr: Addr) -> None:
-        """Stop every torrent from connecting to a peer that sent bad data"""
-        log.warning("banning %s for sending bad data", addr)
+    def ban(self, addr: Addr, reason: BanReason) -> None:
+        """Stop every torrent from connecting to a peer"""
+        log.warning("banning %s: %s", addr, reason)
         self._banned.add(addr)
         for callback in self._callbacks["ban"]:
             callback(addr)
 
     def is_banned(self, addr: Addr) -> bool:
         return addr in self._banned
+
+    def is_blocked(self, addr: Addr) -> bool:
+        """Whether an address is in :attr:`.Config.ip_blocklist`, so no torrent connects to it"""
+        return any(addr.ip in net for net in self.config.ip_blocklist)
 
     def tracker_ready_at(self, url: str) -> float:
         """When torrents can announce to a tracker, which is in the past unless it's backed off"""
@@ -121,7 +134,8 @@ class Shared:
         Blocks, so run it in a worker thread.
         """
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps({"banned": sorted(self._banned)}))
+        banned = sorted([str(addr.ip), addr.port] for addr in self._banned)
+        tmp.write_text(json.dumps({"banned": banned}))
         os.replace(tmp, path)
 
     def load(self, path: Path) -> None:
@@ -131,4 +145,4 @@ class Shared:
         """
         if path.exists():
             state = json.loads(path.read_text())
-            self._banned |= {Addr(host, port) for host, port in state["banned"]}
+            self._banned |= {Addr.parse(ip, port) for ip, port in state["banned"]}

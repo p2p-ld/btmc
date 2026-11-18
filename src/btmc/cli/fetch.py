@@ -10,7 +10,7 @@ from torrent_models import Torrent
 
 from btmc.cli.common import running_client, torrent_options
 from btmc.cli.progress import TorrentProgress
-from btmc.types import Addr
+from btmc.types import AnyAddr
 
 
 @click.command("fetch")
@@ -21,7 +21,7 @@ def fetch(
     console: Console,
     torrent: Torrent[Any],
     dest: Path,
-    peer: list[Addr],
+    peer: list[AnyAddr],
     listen: int | None,
     no_trackers: bool,
     pieces: tuple[int, ...],

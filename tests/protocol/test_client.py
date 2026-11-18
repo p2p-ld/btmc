@@ -7,6 +7,7 @@ import anyio
 import pytest
 
 from btmc import Client, Config, TorrentState
+from btmc.protocol.shared import BanReason
 from btmc.types import Addr
 from btmc.utils import info_hashes
 
@@ -49,11 +50,15 @@ async def test_udp(client, torrent, seeders, tracker):
     assert torrent.check(t.store.root)
 
 
-async def test_resume(client, seeded, torrent, tmp_path):
-    """A second client using the same directory already has everything"""
+async def test_resume(client, config, seeded, torrent):
+    """
+    A second client using the same directories already has everything,
+    from the resume file, without checking the data
+    """
     await client.fetch(seeded)
-    async with Client(config=Config(download_dir=tmp_path)) as second:
+    async with Client(config=config) as second:
         t = second.add(torrent, trackers=[])
+        assert t._disk_check is None
         await second.fetch(t)
     assert t.downloaded == 0
 
@@ -186,6 +191,21 @@ async def test_stopping_closes_connections_waiting_for_a_handshake(config):
             await remote.receive()
 
 
+@pytest.mark.parametrize(
+    "config",
+    [{"listen_host": "127.0.0.1", "port": 0, "ip_blocklist": ["127.0.0.0/8"]}],
+    indirect=True,
+)
+async def test_incoming_from_blocked_address(config):
+    """A connection from a blocked address is closed without waiting for its handshake"""
+    async with (
+        Client(config=config) as client,
+        await anyio.connect_tcp("127.0.0.1", client.port) as remote,
+    ):
+        with anyio.fail_after(1), pytest.raises(anyio.EndOfStream):
+            await remote.receive()
+
+
 async def test_fetch_timeout(client, one_torrent):
     """
     With no peers, fetch gives up after its timeout, and the pieces are still wanted,
@@ -311,8 +331,8 @@ async def test_state_file(torrent, tmp_path):
     path.write_text(json.dumps({"banned": [["10.0.0.1", 1]]}))
     async with Client(config=Config(download_dir=tmp_path, state_file=path)) as client:
         t = client.add(torrent, trackers=[])
-        assert t.shared.is_banned(("10.0.0.1", 1))
-        t.shared.ban(("10.0.0.2", 2))
+        assert t.shared.is_banned(Addr.parse("10.0.0.1", 1))
+        t.shared.ban(Addr.parse("10.0.0.2", 2), BanReason.BAD_DATA)
     assert json.loads(path.read_text()) == {"banned": [["10.0.0.1", 1], ["10.0.0.2", 2]]}
 
 

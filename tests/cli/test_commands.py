@@ -68,6 +68,17 @@ def test_fetch_piece_out_of_range(torrent_file, tmp_path):
     assert "there's no piece 100000" in result.output
 
 
+def test_torrent_past_the_limits(torrent_file, tmp_path, monkeypatch):
+    """The torrent is read with the limits in btmc.toml"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "btmc.toml").write_text("[torrent_limits]\nmax_pieces = 1\n")
+    result = CliRunner().invoke(
+        main, ["fetch", str(torrent_file), str(tmp_path / "dest"), "--no-trackers"]
+    )
+    assert result.exit_code == 2
+    assert "max_pieces" in result.output
+
+
 def test_zip_needs_a_file(torrent_file, tmp_path):
     """A torrent with more than one file has to say which is the zip"""
     result = CliRunner().invoke(
@@ -98,8 +109,11 @@ def test_zip_lists_members(torrent_file, seeders, tmp_path):
 
 
 @pytest.mark.parametrize("clear", [True, False])
-def test_mount_clear_cache(torrent_file, torrent, tmp_path, monkeypatch, clear):
-    """--clear-cache deletes what's been fetched for this torrent before mounting, and no more"""
+def test_mount_clear_cache(torrent_file, torrent, tmp_path, state_dir, monkeypatch, clear):
+    """
+    --clear-cache deletes what's been fetched for this torrent before mounting,
+    and its resume files, and no more
+    """
     try:
         import btmc.fsspec.fuse as fuse
     except OSError:
@@ -109,7 +123,9 @@ def test_mount_clear_cache(torrent_file, torrent, tmp_path, monkeypatch, clear):
     cache = tmp_path / "cache"
     fetched = cache / torrent_name(torrent) / "fetched.bin"
     other = cache / "another-torrent" / "fetched.bin"
-    for path in (fetched, other):
+    resume = state_dir / "resume" / torrent_name(torrent) / "elsewhere.have"
+    other_resume = state_dir / "resume" / "another-torrent" / "elsewhere.have"
+    for path in (fetched, other, resume, other_resume):
         path.parent.mkdir(parents=True)
         path.write_bytes(b"x")
     mountpoint = tmp_path / "mnt"
@@ -131,4 +147,6 @@ def test_mount_clear_cache(torrent_file, torrent, tmp_path, monkeypatch, clear):
     assert result.exit_code == 0, result.output
     assert len(mounted) == 1
     assert fetched.exists() is not clear
+    assert resume.exists() is not clear
     assert other.exists()
+    assert other_resume.exists()

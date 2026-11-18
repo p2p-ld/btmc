@@ -14,20 +14,27 @@ class PieceStore:
     Writes verified pieces into the torrent's files, and saves which pieces we have.
 
     Files are created sparse, on first write. Which pieces we have is kept in a small
-    resume file next to the data, so they aren't fetched again.
+    resume file, so they aren't fetched again. It's kept outside of ``root``,
+    so nothing in a torrent can reach it.
     The resume file is trusted as-is, without rechecking the data. Without one,
     whatever data is already there is checked with :meth:`.read_piece`, to make one.
 
     Reading and writing block, so run them in a worker thread.
     Pieces can be written from several threads at once, since they never overlap,
     but call :meth:`.save_have` from one thread at a time.
+
+    Args:
+        root: where the torrent's files go
+        n_pieces: pieces in the torrent
+        resume_path: the resume file for the torrent's data in ``root``
     """
 
-    def __init__(self, root: Path, n_pieces: int, name: str):
+    def __init__(self, root: Path, n_pieces: int, resume_path: Path):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.n_pieces = n_pieces
-        self.resume_path = self.root / f".{name}.have"
+        self.resume_path = resume_path
+        self.resume_path.parent.mkdir(parents=True, exist_ok=True)
         self._paths: dict[str, Path] = {}
 
     def load_have(self) -> Bitfield | None:

@@ -11,7 +11,7 @@ from torrent_models import Torrent, safe_join
 from btmc.cli.common import echo, running_client, torrent_options
 from btmc.cli.progress import TorrentProgress
 from btmc.files.zip import TorrentZip
-from btmc.types import Addr
+from btmc.types import AnyAddr
 
 
 @click.command("zip")
@@ -34,7 +34,7 @@ def zip_(
     console: Console,
     torrent: Torrent[Any],
     dest: Path,
-    peer: list[Addr],
+    peer: list[AnyAddr],
     listen: int | None,
     no_trackers: bool,
     path: str | None,

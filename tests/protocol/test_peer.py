@@ -7,7 +7,7 @@ import pytest
 from anyio.streams.buffered import BufferedByteStream
 
 from btmc import Config, Peer
-from btmc.exceptions import PeerError
+from btmc.exceptions import MalformedMessage, PeerError
 from btmc.protocol.messages import (
     Bitfield,
     BitfieldMessage,
@@ -21,6 +21,7 @@ from btmc.protocol.messages import (
     Piece,
     Request,
     Unchoke,
+    Unknown,
 )
 from btmc.protocol.peer import CloseReason
 from btmc.protocol.shared import Shared
@@ -28,7 +29,7 @@ from btmc.types import Addr, Block
 
 from ..fixtures import MakePipe
 
-ADDR = Addr("10.0.0.1", 6881)
+ADDR = Addr.parse("10.0.0.1", 6881)
 INFO_HASH = bytes(range(20))
 OUR_ID = b"A" * 20
 THEIR_ID = b"B" * 20
@@ -188,9 +189,8 @@ async def test_closed_before_running(peers: Peers):
         Handshake(bytes(20), THEIR_ID).encode(),
         Handshake(INFO_HASH, OUR_ID).encode(),
         b"\x13BitTorrent protocox" + THEIR_HANDSHAKE[20:],
-        THEIR_HANDSHAKE + b"\x7f\xff\xff\xff",
     ],
-    ids=["other info hash", "ourselves", "not bittorrent", "message too long"],
+    ids=["other info hash", "ourselves", "not bittorrent"],
 )
 async def test_protocol_error_ends_run(peers: Peers, data: bytes):
     peer, remote = peers.linked()
@@ -199,6 +199,58 @@ async def test_protocol_error_ends_run(peers: Peers, data: bytes):
         await peer.run()
     assert peer.close_reason is CloseReason.PROTOCOL_ERROR
     assert isinstance(peer.close_error, PeerError)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        (2).to_bytes(4) + b"\x00\x00",
+        (4).to_bytes(4) + b"\x04\x00\x00\x00",
+        # 10 pieces take 2 bytes
+        (2).to_bytes(4) + b"\x05\x80",
+        (4).to_bytes(4) + b"\x05\x80\x00\x00",
+        # only the start of these is sent, since the rest is never read
+        (1 + 8 + 16384 + 1).to_bytes(4) + b"\x07",
+        b"\x7f\xff\xff\xff\x00",
+    ],
+    ids=[
+        "choke with a body",
+        "short have",
+        "short bitfield",
+        "long bitfield",
+        "piece longer than a block",
+        "huge choke",
+    ],
+)
+async def test_malformed_message_ends_run(peers: Peers, data: bytes):
+    """A message of the wrong length for its kind closes the connection before its body is read"""
+    peer, remote = peers.linked()
+    await remote.send(THEIR_HANDSHAKE + data)
+    with anyio.fail_after(1):
+        await peer.run()
+    assert peer.close_reason is CloseReason.MALFORMED_MESSAGE
+    assert isinstance(peer.close_error, MalformedMessage)
+
+
+async def test_unknown_messages_are_skipped(peers: Peers):
+    """
+    Messages of extensions we don't speak are skipped however long they are,
+    and don't count as the peer being alive
+    """
+    peer, remote = peers.linked()
+    received: list[PeerMessage] = []
+    peer.add_callback("message", lambda _, msg: received.append(msg))
+    async with running(peer):
+        await remote.send(THEIR_HANDSHAKE)
+        await anyio.wait_all_tasks_blocked()
+        handshaken_at = peer.received_at
+        await anyio.sleep(0.01)
+        await remote.send(Unknown(20, bytes(100_000)).encode())
+        await anyio.wait_all_tasks_blocked()
+        assert peer.received_at == handshaken_at
+        await remote.send(Unchoke().encode())
+        await anyio.wait_all_tasks_blocked()
+    assert received == [Unchoke()]
 
 
 async def test_incoming(peers: Peers):
@@ -337,11 +389,6 @@ def test_later_bitfield_replaces_what_the_peer_has(peers: Peers):
     bits = BitfieldMessage(Bitfield(16, b"\x80\x00"))
     assert peer._receive(bits, 0) == bits
     assert list(peer.has) == [0]
-
-
-def test_bitfield_wrong_size(peers: Peers):
-    with pytest.raises(PeerError):
-        peers.new(incoming=True)._receive(BitfieldMessage(Bitfield(8, b"\x80")), 0)
 
 
 def test_requests(peers: Peers):

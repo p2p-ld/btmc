@@ -97,6 +97,8 @@ port = 6881
 # where torrents go, unless they're given a directory,
 # by default the user cache directory
 download_dir = "~/btmc"
+# where to keep which pieces we have, by default the user state directory
+state_dir = "~/.btmc-state"
 # keep banned peers between runs
 state_file = "btmc-state.json"
 ```

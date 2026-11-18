@@ -1,8 +1,12 @@
+import dataclasses
+from ipaddress import ip_network
 from pathlib import Path
 
 import pytest
+from torrent_models import LoadLimits
 
 from btmc import Config
+from btmc.config import DEFAULT_IP_BLOCKLIST
 
 
 def test_from_toml(tmp_path: Path):
@@ -34,8 +38,32 @@ def test_from_toml_with_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_paths_from_toml(tmp_path: Path):
     path = tmp_path / "btmc.toml"
-    path.write_text('state_file = "state/btmc.json"\n')
-    assert Config.from_toml(path).state_file == Path("state/btmc.json")
+    path.write_text('state_file = "state/btmc.json"\nstate_dir = "~/state"\n')
+    config = Config.from_toml(path)
+    assert config.state_file == Path("state/btmc.json")
+    assert config.state_dir == Path.home() / "state"
+
+
+def test_ip_blocklist(tmp_path: Path):
+    """Networks come from TOML as strings, and setting them replaces the defaults"""
+    assert Config().ip_blocklist == [ip_network(net) for net in DEFAULT_IP_BLOCKLIST]
+    path = tmp_path / "btmc.toml"
+    path.write_text('ip_blocklist = ["10.0.0.0/8", "fd00::/8"]\n')
+    assert Config.from_toml(path).ip_blocklist == [ip_network("10.0.0.0/8"), ip_network("fd00::/8")]
+    with pytest.raises(ValueError):
+        Config(ip_blocklist=["10.0.0.1/8"])  # type: ignore[list-item]
+
+
+def test_torrent_limits(tmp_path: Path):
+    """Limits default to libtorrent's, and each one in the TOML table replaces its default"""
+    assert Config().torrent_limits == LoadLimits.libtorrent()
+    path = tmp_path / "btmc.toml"
+    path.write_text("[torrent_limits]\nmax_pieces = 100\n")
+    limits = Config.from_toml(path).torrent_limits
+    assert limits == dataclasses.replace(LoadLimits.libtorrent(), max_pieces=100)
+    path.write_text("[torrent_limits]\nmax_piece = 100\n")
+    with pytest.raises(TypeError):
+        Config.from_toml(path)
 
 
 def test_from_toml_errors(tmp_path: Path):
