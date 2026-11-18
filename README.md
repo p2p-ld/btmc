@@ -1,6 +1,6 @@
 # `btmc` - bittorrent microclient
 
-~ alpha software primarily intended for use with [sciop](https://codeberg.org/Safeguarding/sciop) ~
+~ alpha software primarily intended for use with [sciop](https://codeberg.org/Safeguarding/sciop), use at your own risk! ~
 
 A small asyncio bittorrent client for fetching specific pieces of torrents,
 and the files inside zip files inside torrents (like WACZ web archives),
