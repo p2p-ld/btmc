@@ -117,6 +117,7 @@ async def test_piece_from_two_peers(client, seeded, torrent, seeders):
     assert {s.addr for s in seeders} in senders_by_piece(block).values()
 
 
+@pytest.mark.bans
 async def test_corrupt_peer(client, torrent, seeders, fake_seeder):
     """A peer sending bad data gets banned, and the peer sending good data doesn't"""
     fake = await fake_seeder(torrent, accept=set(info_hashes(torrent)), corrupt=True)
@@ -130,6 +131,7 @@ async def test_corrupt_peer(client, torrent, seeders, fake_seeder):
 
 
 @pytest.mark.parametrize("config", [{"pipeline_depth": 1}], indirect=True)
+@pytest.mark.bans
 async def test_corrupt_peer_in_shared_pieces(client, torrent, seeders, fake_seeder):
     """
     When pieces mix blocks from a peer sending bad data and a peer sending good data,
@@ -196,6 +198,7 @@ async def test_stopping_closes_connections_waiting_for_a_handshake(config):
     [{"listen_host": "127.0.0.1", "port": 0, "ip_blocklist": ["127.0.0.0/8"]}],
     indirect=True,
 )
+@pytest.mark.network_policy
 async def test_incoming_from_blocked_address(config):
     """A connection from a blocked address is closed without waiting for its handshake"""
     async with (
@@ -325,6 +328,7 @@ async def test_remove_tells_trackers(client, torrent, seeders, tracker):
     assert not tracker.swarms_of(client.peer_id)
 
 
+@pytest.mark.bans
 async def test_state_file(torrent, tmp_path):
     """The client loads banned peers when it starts, and saves them when it closes"""
     path = tmp_path / "state.json"
@@ -377,6 +381,7 @@ async def test_failed_start_closes(tmp_path):
 
 
 @pytest.mark.parametrize("config", [{"max_connections": 1}], indirect=True)
+@pytest.mark.limits
 async def test_connection_limit(client, torrents, seeders):
     """
     With one connection for the whole client, the torrents take turns with it:

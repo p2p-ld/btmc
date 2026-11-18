@@ -14,6 +14,7 @@ from btmc.types import Addr
 REQUEST = AnnounceRequest(info_hash=bytes(20), peer_id=bytes(20), port=1)
 
 
+@pytest.mark.limits
 async def test_unanswered_announce_times_out():
     """A tracker that doesn't answer fails the announce once the timeout is up, sent only once"""
     async with await anyio.create_udp_socket(local_host="127.0.0.1") as silent:
@@ -27,6 +28,7 @@ async def test_unanswered_announce_times_out():
     assert len(packets) == 1
 
 
+@pytest.mark.validation
 async def test_udp_junk_is_skipped():
     """
     Packets that are malformed, for another transaction, or of the wrong kind
@@ -80,6 +82,7 @@ async def test_udp_junk_is_skipped():
         "http://trackér.example/announce",
     ],
 )
+@pytest.mark.validation
 def test_url_ok(url):
     check_url(url)
 
@@ -102,12 +105,14 @@ def test_url_ok(url):
         "http://tr_cker.example/announce",
     ],
 )
+@pytest.mark.validation
 def test_url_bad(url):
     with pytest.raises(TrackerError):
         check_url(url)
 
 
 @pytest.mark.parametrize("status", [200, 204, 301, 404, 500])
+@pytest.mark.validation
 async def test_only_http_200_is_an_answer(status):
     body = b"d8:intervali60e5:peers6:\x7f\x00\x00\x01\x1a\xe1e"
     transport = httpx.MockTransport(lambda _: httpx.Response(status, content=body))

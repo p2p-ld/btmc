@@ -199,8 +199,15 @@ addopts = [
 
 testpaths = ["tests"]
 anyio_mode = "auto"
+# marks described as "safety: ..." also mark their tests `safety`, see tests/conftest.py
 markers = [
   "libtorrent: tests that use libtorrent peers",
+  "safety: every safety check",
+  "validation: safety: malformed or hostile input is refused, skipped, or normalized",
+  "limits: safety: caps on how much we accept, hold, or wait for",
+  "bans: safety: misbehaving peers are found and banned",
+  "network_policy: safety: which addresses we connect to, or take connections from",
+  "confinement: safety: what a torrent or zip can reach on disk",
 ]
 # leaked resources fail tests. When an unclosed object is garbage collected,
 # its ResourceWarning reaches pytest as an unraisable exception

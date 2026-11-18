@@ -1,12 +1,14 @@
 import shutil
 from pathlib import Path
 
+import pytest
 from torrent_models import Torrent
 
 from btmc.protocol.messages import Bitfield
 from btmc.storage import PieceStore
 
 
+@pytest.mark.validation
 def test_resume_file(tmp_path: Path, torrent: Torrent, test_data: Path):
     """There's no resume file until one is made, and a wrong-sized one doesn't count"""
     n_pieces = torrent.layout.n_pieces
