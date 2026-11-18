@@ -3,6 +3,7 @@ import ipaddress
 import os
 import tomllib
 from dataclasses import dataclass
+from enum import StrEnum
 from ipaddress import IPv4Network, IPv6Network
 from pathlib import Path
 from typing import Any, Self
@@ -26,6 +27,16 @@ Addresses that can't be a peer: unspecified ("this network"), multicast,
 reserved IPv4 (including the broadcast address), and IPv6 link-local, which needs to know
 which interface to use. libtorrent refuses the unspecified and IPv6 link-local addresses too.
 """
+
+
+class LogLevel(StrEnum):
+    """How much to log, written in any case in TOML, like ``"debug"``"""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
 
 
 @dataclass
@@ -145,6 +156,23 @@ class Config:
     state_file: Path | None = None
     """Where to keep state between runs, like banned peers. ``None`` keeps nothing."""
 
+    # ---- logging ----
+
+    log_root: str | None = None
+    """
+    The logger of an application that sets up its own logging, like ``"sciop"``, to log
+    under, ignoring the settings below. See :func:`.init_logger`.
+    """
+    log_level_stderr: LogLevel = LogLevel.WARNING
+    log_level_file: LogLevel = LogLevel.INFO
+    log_dir: Path | None = dataclasses.field(
+        default_factory=lambda: platformdirs.user_log_path("btmc")
+    )
+    """
+    Where to keep log files, ``None`` for none.
+    Defaults to the user log directory, like ``~/Library/Logs/btmc`` on macOS.
+    """
+
     def __post_init__(self) -> None:
         # paths come from TOML as strings
         if isinstance(self.download_dir, str):
@@ -153,6 +181,11 @@ class Config:
             self.state_dir = Path(self.state_dir).expanduser()
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
+        if isinstance(self.log_dir, str):
+            self.log_dir = Path(self.log_dir).expanduser()
+        # and levels in any case
+        self.log_level_stderr = LogLevel(self.log_level_stderr.upper())
+        self.log_level_file = LogLevel(self.log_level_file.upper())
         # and networks as strings, raising ValueError for ones like 10.0.0.1/8
         self.ip_blocklist = [ipaddress.ip_network(net) for net in self.ip_blocklist]
         # and tables as dicts
