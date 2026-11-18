@@ -110,7 +110,11 @@ class MiniTracker:
 
     async def _serve_http(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            request = await reader.readuntil(b"\r\n\r\n")
+            try:
+                request = await reader.readuntil(b"\r\n\r\n")
+            except asyncio.IncompleteReadError:
+                # the client gave up before sending its request, like after a short timeout
+                return
             target = request.split(b" ")[1]
             params = dict(parse_qsl(target.split(b"?", 1)[1]))
             if params[b"info_hash"] in self.refuse:
