@@ -112,7 +112,9 @@ class Swarm:
         self.n_pieces = torrent.layout.n_pieces
         self.piece_length = torrent.info.piece_length
         self.info_hashes = info_hashes(torrent)
-        self.trackers: list[str] = self._checked_trackers(torrent.flat_trackers if trackers is None else trackers)
+        self.trackers: list[str] = self._checked_trackers(
+            torrent.flat_trackers if trackers is None else trackers
+        )
         """
         Every tracker's url, apart from ones we can't announce to.
         We announce to all of them at once, like qBittorrent, rather than one tier at a time.

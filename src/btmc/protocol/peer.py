@@ -272,7 +272,9 @@ class Peer:
                     message_id = (await connection.receive_exactly(1))[0]
                     # checked before reading the body, so a peer can't make us hold a long one
                     if not PeerMessage.valid_length(message_id, length - 1, self.has.n):
-                        raise MalformedMessage(f"message {message_id} has invalid length of {length} bytes")
+                        raise MalformedMessage(
+                            f"message {message_id} has invalid length of {length} bytes"
+                        )
                     if message_id not in PeerMessageId:
                         # an extension we don't speak: skipped without holding it, however long
                         left = length - 1
